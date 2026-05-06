@@ -13,6 +13,7 @@ Humera is a **team-style AI-assisted software engineering platform** for solo de
 | **Human-in-the-Loop** | Human is the Team Lead; AI agents execute. Critical milestones require human approval. |
 | **Version Control** | All artifacts (requirements, issues, PRs) are versioned and auditable. |
 | **Separation of Concerns** | Different agents have different responsibilities (PM, Dev, Reviewer). |
+| **Iterative Refinement** | AI presents understanding, Human corrects, repeat until confirmed. |
 
 ### 1.2 Comparison with General-Purpose Agents
 
@@ -23,8 +24,53 @@ Humera is a **team-style AI-assisted software engineering platform** for solo de
 | **Flow** | AI decides path | Human-defined workflow |
 | **Error Handling** | "Try again" | Checkpoint + rollback |
 | **Output** | Final result | Versioned artifacts with history |
+| **Requirements** | AI infers from chat | AI presents, Human confirms |
 
-### 1.3 Design Philosophy
+### 1.3 The Human-AI Collaboration Loop
+
+The core interaction pattern is **iterative refinement**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│   Human: "我要给 API 加 rate limiting"                                      │
+│                    │                                                         │
+│                    ▼                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │              AI presents understanding (paraphrase)                  │   │
+│   │                                                                     │   │
+│   │   功能：给所有 API 添加 rate limiting                                │   │
+│   │   限制：100 req/min per user                                        │   │
+│   │   实现：Redis + sliding window                                       │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                    │                                                         │
+│                    ▼                                                         │
+│   Human: "限制改成 200 req/min"                                            │
+│                    │                                                         │
+│                    ▼                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │              AI presents updated understanding                        │   │
+│   │                                                                     │   │
+│   │   功能：给所有 API 添加 rate limiting                                │   │
+│   │   限制：200 req/min per user  ✓ (updated)                           │   │
+│   │   实现：Redis + sliding window                                       │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                    │                                                         │
+│                    ▼                                                         │
+│   Human: "确认"                                                             │
+│                    │                                                         │
+│                    ▼                                                         │
+│              [Requirements Confirmed]                                        │
+│                    │                                                         │
+│                    ▼                                                         │
+│              /create-issue                                                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Insight**: The AI **presents** its understanding, the Human **corrects** until satisfied. This is not a chatbot — it's a **structured review loop**.
+
+### 1.4 Design Philosophy
 
 ```
 Human (Team Lead) + AI Team Members
@@ -120,7 +166,7 @@ type Session struct {
     CurrentArtifact ArtifactID
     
     // Discussion history (for this session)
-    Discussion []DiscussionEntry
+    Discussion *Discussion
 }
 ```
 
@@ -169,10 +215,56 @@ type Intent struct {
 // - Natural language: AI-inferred
 ```
 
-**Responsibilities**:
-- Parse slash commands
-- Infer intent from natural language
-- Route to correct Flow handler
+**Intent Recognition Rules**:
+
+| Input | Intent | Notes |
+|-------|--------|-------|
+| `/create-issue` | IntentCreateIssue | Explicit command |
+| `/start-dev` or `/start` | IntentStartDev | Explicit command |
+| `/ai-review` | IntentAIReview | Explicit command |
+| `/review` | IntentHumanReview | Human begins manual review |
+| `/revise` | IntentRevise | Human requests fixes |
+| `/merge` | IntentMerge | Human approves merge |
+| `/cancel` | IntentCancel | Cancel current flow |
+| `/switch <project>` | IntentSwitchProject | Switch project context |
+| Natural language (requirements) | IntentDiscuss | AI infers from content |
+| Natural language (correction) | IntentDiscuss (correction) | AI recognizes as modification |
+| "确认" or "OK" | IntentApprove | Approve current state |
+
+**Intent Parser Behavior**:
+
+```go
+func (p *Parser) Parse(input string) *Intent {
+    // 1. Check for slash command
+    if strings.HasPrefix(input, "/") {
+        return p.parseSlashCommand(input)
+    }
+    
+    // 2. Check for approval phrases
+    if isApprovalPhrase(input) {
+        return &Intent{Type: IntentApprove, Confidence: 0.95}
+    }
+    
+    // 3. Check for correction phrases
+    if isCorrectionPhrase(input) {
+        return &Intent{Type: IntentDiscuss, Params: map[string]string{"correction": "true"}}
+    }
+    
+    // 4. Default to discuss intent
+    return &Intent{Type: IntentDiscuss, Confidence: 0.7}
+}
+
+func isCorrectionPhrase(input string) bool {
+    // "不对", "不是", "改成", "修改", "错了", "但是..."
+    patterns := []string{"不对", "不是", "改成", "修改", "错了", "但是", "再", "还", "要加"}
+    for _, p := range patterns {
+        if strings.Contains(input, p) {
+            return true
+        }
+    }
+    return false
+}
+```
 
 ---
 
@@ -281,6 +373,163 @@ type Team struct {
 | Dev Agent | dev | Code implementation, PR creation | terminal, file, github, claude-code |
 | Reviewer Agent | reviewer | Code review, Review result display | github, terminal, code-analysis |
 
+#### PM Agent: Requirements Discussion Workflow
+
+The PM Agent implements the **iterative refinement loop**:
+
+```go
+// team/pm.go
+type PMAgent struct {
+    llm      llm.Provider
+    display  Display
+    github   GitHubTool
+}
+
+// Discuss implements the iterative refinement loop:
+// 1. Human states requirement
+// 2. AI paraphrases and presents understanding
+// 3. Human corrects if needed
+// 4. Repeat until confirmed
+func (a *PMAgent) Discuss(ctx context.Context, input string, discussion *Discussion) (*Result, error) {
+    intent := parseIntent(input)
+    
+    switch intent.Type {
+    case IntentDiscuss:
+        // Add human statement to discussion
+        discussion.AddMessage(Human, input, Statement)
+        
+        // AI analyzes and presents understanding
+        understanding := a.analyzeRequirements(discussion)
+        
+        // Display to Human for review
+        return &Result{
+            Display: a.display.Requirements(understanding),
+            Continue: true,  // Wait for human feedback
+        }
+        
+    case IntentApprove:
+        // Mark discussion as confirmed
+        discussion.Confirm()
+        return &Result{
+            Display: a.display.Confirmed(discussion),
+            Continue: false,
+        }
+        
+    case IntentCreateIssue:
+        // Create GitHub Issue from confirmed discussion
+        issue := a.createIssue(discussion)
+        return &Result{
+            Artifact: issue,
+            Continue: false,
+        }
+    }
+}
+
+// analyzeRequirements generates a structured understanding
+func (a *PMAgent) analyzeRequirements(discussion *Discussion) *RequirementsUnderstanding {
+    prompt := fmt.Sprintf(`
+Based on the following discussion, extract and structure the requirements:
+
+%s
+
+Format the output as:
+- 功能：
+- 范围：
+- 限制：
+- 实现方式：
+- 验收标准：
+`, discussion.Format())
+    
+    response := a.llm.Chat(ctx, prompt)
+    return parseRequirements(response)
+}
+```
+
+#### Dev Agent: Development Workflow
+
+```go
+// team/dev.go
+type DevAgent struct {
+    llm         llm.Provider
+    claudeCode  ClaudeCodeTool
+    terminal    TerminalTool
+    file        FileTool
+    github      GitHubTool
+}
+
+// StartDev begins development from an Issue
+func (a *DevAgent) StartDev(ctx context.Context, issue *Issue) (*Result, error) {
+    // 1. Create feature branch
+    branch := fmt.Sprintf("feature/%d-%s", issue.Number, slug(issue.Title))
+    a.git.CreateBranch(branch)
+    
+    // 2. Analyze Issue requirements
+    tasks := a.decomposeIssue(issue)
+    
+    // 3. Execute each task (using Claude Code)
+    for _, task := range tasks {
+        result := a.executeTask(ctx, task)
+        if result.Error != nil {
+            return result, result.Error
+        }
+    }
+    
+    // 4. Create PR
+    pr := a.github.CreatePR(&PR{
+        Title:     issue.Title,
+        Body:      a.generatePRDescription(issue),
+        Head:      branch,
+        Base:      "main",
+        IssueRefs: []int{issue.Number},
+    })
+    
+    return &Result{
+        Artifact: pr,
+        State:    FlowPROpen,
+    }
+}
+```
+
+#### Reviewer Agent: Code Review Workflow
+
+```go
+// team/reviewer.go
+type ReviewerAgent struct {
+    llm       llm.Provider
+    github    GitHubTool
+    codeAnalysis CodeAnalysisTool
+}
+
+// Review performs AI code review on a PR
+func (a *ReviewerAgent) Review(ctx context.Context, pr *PullRequest) (*Result, error) {
+    // 1. Get PR diff
+    diff := a.github.GetPRDiff(pr)
+    
+    // 2. Analyze code changes
+    analysis := a.codeAnalysis.Analyze(diff)
+    
+    // 3. Generate review comments
+    review := a.llm.Chat(ctx, fmt.Sprintf(`
+Review the following code changes for:
+1. Correctness
+2. Security issues
+3. Performance problems
+4. Code style violations
+5. Missing tests
+
+Changes:
+%s
+`, diff))
+    
+    // 4. Post review to GitHub
+    a.github.PostReview(pr, review)
+    
+    return &Result{
+        Display: a.display.ReviewResult(review),
+    }
+}
+```
+
 **Handoff Protocol**:
 ```
 PM Agent ──handoff(context)──▶ Dev Agent
@@ -337,6 +586,89 @@ type ArtifactVersion struct {
     CreatedBy string
     CreatedAt time.Time
     Diff      string  // What changed from previous version
+}
+```
+
+#### Discussion Artifact
+
+The Discussion artifact tracks the **iterative refinement loop**:
+
+```go
+// artifact/discussion.go
+type Discussion struct {
+    ID        DiscussionID
+    ProjectID ProjectID
+    
+    // Messages in the discussion
+    Messages []DiscussionMessage
+    
+    // Current understanding (latest AI paraphrase)
+    CurrentUnderstanding *RequirementsUnderstanding
+    
+    // Version history
+    Versions []DiscussionVersion
+    
+    // Status
+    Status DiscussionStatus  // active | confirmed | cancelled
+    
+    // Confirmed version number (if Status == confirmed)
+    ConfirmedVersion *int
+}
+
+type DiscussionMessage struct {
+    ID        string
+    Role      string    // "human" | "ai"
+    Type      string    // "statement" | "paraphrase" | "correction" | "confirmation"
+    Content   string
+    Timestamp time.Time
+}
+
+type RequirementsUnderstanding struct {
+    Version int
+    
+    // Structured fields
+    Features     []string
+    Scope        string
+    Constraints  []string
+    Implementation string
+    AcceptanceCriteria []string
+    
+    // Raw summary
+    Summary string
+}
+
+// AddMessage adds a message and updates understanding
+func (d *Discussion) AddMessage(role, content, msgType string) {
+    d.Messages = append(d.Messages, DiscussionMessage{
+        ID:        generateID(),
+        Role:      role,
+        Type:      msgType,
+        Content:   content,
+        Timestamp: time.Now(),
+    })
+    
+    // If this is a human statement, AI should update understanding
+    if role == "human" {
+        d.CurrentUnderstanding = nil  // Will be regenerated by AI
+    }
+}
+
+// CreateVersion snapshots current state
+func (d *Discussion) CreateVersion() *DiscussionVersion {
+    d.Version++
+    v := &DiscussionVersion{
+        Version:   d.Version,
+        Understanding: d.CurrentUnderstanding,
+        Timestamp: time.Now(),
+    }
+    d.Versions = append(d.Versions, *v)
+    return v
+}
+
+// Confirm marks the discussion as confirmed
+func (d *Discussion) Confirm() {
+    d.Status = DiscussionStatusConfirmed
+    d.ConfirmedVersion = &d.Version
 }
 ```
 
@@ -441,13 +773,13 @@ type Registry struct {
 
 ### 3.9 Display
 
-**Purpose**: Format and present AI results to Human.
+**Purpose**: Format and present AI results to Human. This is the **Result Display Page** mentioned in the workflow.
 
 ```go
 // display/display.go
 type Display interface {
-    // Render requirements understanding
-    RequirementsUnderstanding(content *Requirements) DisplayBlock
+    // Render requirements understanding (for discussion loop)
+    Requirements(content *RequirementsUnderstanding) DisplayBlock
     
     // Render Issue draft
     IssueDraft(issue *Artifact) DisplayBlock
@@ -458,14 +790,103 @@ type Display interface {
     // Render Code Review result
     ReviewResult(review *Review) DisplayBlock
     
-    // Render confirmation buttons
-    Confirmation(buttons []Button) DisplayBlock
+    // Render confirmation
+    Confirmed(artifact *Artifact) DisplayBlock
+    
+    // Render error
+    Error(err error) DisplayBlock
 }
 
 type DisplayBlock struct {
     Type    string      // "markdown" | "card" | "buttons" | "table"
     Content interface{}
 }
+```
+
+**Display Templates**:
+
+#### Requirements Understanding Display
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  📋 需求理解结果 (v2)                                           │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                │
+│  功能：给所有 API 添加 rate limiting                           │
+│                                                                │
+│  范围：                                                         │
+│    • POST /api/v1/users                                       │
+│    • POST /api/v1/orders                                       │
+│    • GET /api/v1/products                                       │
+│                                                                │
+│  限制：                                                         │
+│    • 200 req/min per user  ✓ (updated from 100)               │
+│    • 1000 req/min per IP                                       │
+│                                                                │
+│  实现方式：Redis + sliding window                              │
+│                                                                │
+│  验收标准：                                                     │
+│    • [ ] 超过限制返回 429                                      │
+│    • [ ] 有 X-RateLimit-* header                               │
+│    • [ ] 单元测试覆盖率 > 80%                                   │
+│                                                                │
+│  ─────────────────────────────────────────────────────────────  │
+│  [确认 ✓]  [修改 ✎]                                           │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+#### Issue Draft Display
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  📝 Issue 草稿                                                 │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                │
+│  Title: [feature] API Rate Limiting                           │
+│                                                                │
+│  Labels: [feature] [api]                                      │
+│                                                                │
+│  Body:                                                         │
+│  ## 功能                                                        │
+│  给所有 API 添加 rate limiting...                              │
+│                                                                │
+│  ## 验收标准                                                    │
+│  - [ ] 超过限制返回 429                                        │
+│  - [ ] 有 X-RateLimit-* header                                 │
+│                                                                │
+│  ─────────────────────────────────────────────────────────────  │
+│  [创建 Issue ✓]  [取消]                                        │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+#### Code Review Result Display
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  🔍 Code Review 结果                                            │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                │
+│  PR: #456 feature/rate-limiting → main                        │
+│  Status: ✅ Approved / ⚠️ Changes Requested                     │
+│                                                                │
+│  AI Review:                                                    │
+│  ─────────────────────────────────                            │
+│  ✅ 逻辑正确，Redis key 设计合理                                │
+│  ⚠️ line 23: 建议添加熔断逻辑                                   │
+│  ⚠️ line 45: 缺少错误日志                                       │
+│  ❌ line 67: 硬编码的阈值应该配置化                             │
+│                                                                │
+│  手动 Review:                                                   │
+│  ─────────────────────────────────                            │
+│  ⬜ 请检查业务逻辑是否满足需求                                   │
+│  ⬜ 请确认错误处理                                              │
+│                                                                │
+│  ─────────────────────────────────────────────────────────────  │
+│  [确认并合并 ✓]  [要求修改 ✎]  [关闭 PR]                        │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 **Supported Formats**:
@@ -530,6 +951,8 @@ type Infra struct {
 │                                                                                 │
 │  Slash Command: /create-issue → IntentCreateIssue                              │
 │  Natural Language: "add rate limiting" → IntentDiscuss                          │
+│  "改成 200" → IntentDiscuss (correction)                                        │
+│  "确认" → IntentApprove                                                          │
 │  Responsibility: Understand what Human wants                                    │
 │                                                                                 │
 └────────────────────────────────────────┬────────────────────────────────────────┘
@@ -553,17 +976,25 @@ type Infra struct {
 │  ┌─────────────────────────────────────────────────────────────────────────┐   │
 │  │                            PM Agent                                       │   │
 │  │  Role: pm | Tools: github, display                                       │   │
-│  │  Execute: Requirements analysis, Issue drafting, Display results         │   │
+│  │  Execute: Requirements analysis, Issue drafting, Display results        │   │
+│  │                                                                           │   │
+│  │  Discuss Loop:                                                           │   │
+│  │    1. Human: "我要加 rate limiting"                                       │   │
+│  │    2. AI → Display.Requirements(understanding)  ← Presented             │   │
+│  │    3. Human: "限制改成 200"                                              │   │
+│  │    4. AI → Display.Requirements(updated)  ← Presented                    │   │
+│  │    5. Human: "确认"                                                      │   │
+│  │    6. AI → /create-issue                                                 │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                 │
 │  ┌─────────────────────────────────────────────────────────────────────────┐   │
 │  │                            Dev Agent                                      │   │
-│  │  Role: dev | Tools: terminal, file, github, claude-code                   │   │
+│  │  Role: dev | Tools: terminal, file, github, claude-code                    │   │
 │  │  Execute: Code implementation, PR creation                                │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                 │
 │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                         Reviewer Agent                                   │   │
+│  │                         Reviewer Agent                                    │   │
 │  │  Role: reviewer | Tools: github, terminal, code-analysis                  │   │
 │  │  Execute: Code review, Output review results                              │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
@@ -594,6 +1025,20 @@ type Infra struct {
                                          ▼
 ┌────────────────────────────────────────▼────────────────────────────────────────┐
 │                                    Display                                       │
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │                        Result Display Page                               │   │
+│  │                                                                          │   │
+│  │  ┌──────────────────────────────────────────────────────────────────┐   │   │
+│  │  │  📋 需求理解结果 (v2)                                            │   │   │
+│  │  │  ────────────────────────────────────────────────────────────    │   │   │
+│  │  │  功能：给所有 API 添加 rate limiting                             │   │   │
+│  │  │  限制：200 req/min per user ✓ (updated)                        │   │   │
+│  │  │  ────────────────────────────────────────────────────────────    │   │   │
+│  │  │  [确认 ✓]  [修改 ✎]                                            │   │   │
+│  │  └──────────────────────────────────────────────────────────────────┘   │   │
+│  │                                                                          │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                 │
 │  Markdown / Card / Buttons                                                       │
 │  Back to Human via Channel                                                      │
@@ -626,23 +1071,91 @@ type Infra struct {
 | "我想加一个功能..." | discuss | Start requirements discussion |
 | "帮我看看这个 bug" | discuss | Start bug discussion |
 | "确认" | approve | Approve current state |
+| "OK" | approve | Approve current state |
+| "对" | approve | Approve current state |
+| "不对/不是/改成..." | discuss (correction) | Human is correcting |
 | "我来 review" | human-review | Human starts review |
 | "有问题" | revise | Need fixes |
 | "没问题了" | approve | Approval after fixes |
 
-### 5.3 Command Flow Examples
+### 5.3 Discussion Loop Flow
+
+The core interaction pattern for requirements gathering:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Requirements Discussion Loop                          │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  Human: "我要给 API 加 rate limiting"                               │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│                         Intent: IntentDiscuss                                │
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PM Agent.AnalyzeRequirements()                                     │    │
+│  │                                                                     │    │
+│  │  → RequirementsUnderstanding{                                       │    │
+│  │      Features: ["API rate limiting"],                               │    │
+│  │      Constraints: ["100 req/min per user"],                         │    │
+│  │      Implementation: "Redis + sliding window"                      │    │
+│  │    }                                                                │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  Display.Requirements() → [Result Display Page]                    │    │
+│  │                                                                     │    │
+│  │  ┌───────────────────────────────────────────────────────────────┐  │    │
+│  │  │ 功能：给所有 API 添加 rate limiting                          │  │    │
+│  │  │ 限制：100 req/min per user                                   │  │    │
+│  │  │ 实现：Redis + sliding window                                 │  │    │
+│  │  │                                                               │  │    │
+│  │  │ [确认 ✓]  [修改 ✎]                                           │  │    │
+│  │  └───────────────────────────────────────────────────────────────┘  │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                          │
+│                     ┌──────────────┴──────────────┐                         │
+│                     │                               │                         │
+│                Human: "确认"                  Human: "限制改成 200"            │
+│                     │                               │                         │
+│                     ▼                               ▼                         │
+│          Intent: IntentApprove          Intent: IntentDiscuss                 │
+│          (correction=false)             (correction=true)                    │
+│                     │                               │                         │
+│                     ▼                               ▼                         │
+│          ┌─────────────────┐          ┌─────────────────────────────────┐    │
+│          │ CreateVersion() │          │ Update RequirementsUnderstanding │    │
+│          │ Confirm()       │          │ + Display.Requirements(updated)   │    │
+│          │                 │          │                                 │    │
+│          │ Flow → issue-   │          │ → Back to Display (loop)        │    │
+│          │ created         │          │                                 │    │
+│          └─────────────────┘          └─────────────────────────────────┘    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.4 Full Command Flow Examples
 
 **Requirements Discussion Flow**:
 ```
 1. Human: "我要给 API 加 rate limiting"
    → Intent: discuss
-   → Display: AI paraphrases understanding
+   → PM Agent analyzes requirements
+   → Display: AI presents understanding (v1)
    
 2. Human: "对，但是限制改成 200 req/min"
-   → Intent: discuss (with correction)
-   → Display: AI shows updated understanding
+   → Intent: discuss (correction)
+   → PM Agent updates understanding
+   → Display: AI shows updated understanding (v2)
    
-3. Human: "确认，/create-issue"
+3. Human: "确认"
+   → Intent: approve
+   → Discussion confirmed (v2)
+   
+4. Human: "/create-issue"
    → Intent: create-issue
    → PM Agent creates GitHub Issue
    → Flow: discussing → issue-created
@@ -693,39 +1206,39 @@ type Infra struct {
                     │           │ Human: "confirm"                            │
                     │           ▼                                              │
                     │     ┌───────────────┐                                    │
-                    │     │ issue-created │ ←── GitHub Issue created         │
+                    │     │ issue-created │ ←── GitHub Issue created           │
                     │     └───────┬───────┘                                    │
                     │             │                                             │
                     │             │ Human: "/start-dev"                        │
                     │             │ Human: "confirm"                            │
                     │             ▼                                             │
                     │     ┌─────────────┐                                      │
-                    │     │  in-dev     │ ←── Dev Agent working                │
+                    │     │  in-dev     │ ←── Dev Agent working                 │
                     │     └──────┬──────┘                                      │
                     │            │                                              │
-                    │            │ Dev Agent: PR created                       │
+                    │            │ Dev Agent: PR created                        │
                     │            ▼                                              │
                     │     ┌─────────────┐                                      │
-                    │     │  pr-open   │ ←── PR submitted                      │
+                    │     │  pr-open   │ ←── PR submitted                       │
                     │     └──────┬──────┘                                      │
                     │            │                                              │
                     │            │ AI Reviewer: review complete                 │
                     │            ▼                                              │
                     │     ┌─────────────┐                                      │
     Human:          │     │ reviewing   │                                      │
-    "/revise" ──────┼──→  └──────┬──────┘                                      │
+    "/revise" ───────┼──→  └──────┬──────┘                                      │
                         │            │                                             │
                         │            │ Human: "/merge"                           │
                         │            │ Human: "LGTM"                              │
                         │            ▼                                             │
                         │     ┌─────────────┐                                      │
-                        │     │  merged    │ ←── Code merged to main            │
+                        │     │  merged    │ ←── Code merged to main             │
                         │     └─────────────┘                                      │
                         │            │                                             │
-                        │            │ Auto: deployed                             │
+                        │            │ Auto: deployed                            │
                         │            ▼                                             │
                         │     ┌─────────────┐                                      │
-                        │     │  closed    │ ←── Issue closed                    │
+                        │     │  closed    │ ←── Issue closed                     │
                         │     └─────────────┘                                      │
                         │                                                           │
                         └─────────────────────────────────────────────────────────┘
@@ -791,6 +1304,9 @@ type Discussion struct {
     // Versions (each confirmation creates a version)
     Versions []DiscussionVersion
     
+    // Current understanding (regenerated on each iteration)
+    CurrentUnderstanding *RequirementsUnderstanding
+    
     // Status
     Status   DiscussionStatus  // active | confirmed | cancelled
     ConfirmedVersion *int       // Pointer to confirmed version number
@@ -801,8 +1317,33 @@ type Discussion struct {
 
 type DiscussionMessage struct {
     Role    string    // "human" | "ai"
-    Content string
     Type    string    // "statement" | "paraphrase" | "correction" | "confirmation"
+    Content string
+    Timestamp time.Time
+}
+
+type RequirementsUnderstanding struct {
+    Version int
+    
+    // Structured fields
+    Features           []string
+    Scope              string
+    Constraints        []string
+    Implementation     string
+    AcceptanceCriteria []string
+    
+    // Raw summary
+    Summary string
+    
+    // Change tracking
+    UpdatedFields []string  // Which fields were updated in this version
+}
+
+type DiscussionVersion struct {
+    Version         int
+    Understanding  *RequirementsUnderstanding
+    CreatedAt       time.Time
+    IsConfirmed     bool
 }
 ```
 
@@ -818,8 +1359,8 @@ type Issue struct {
     Title   string
     Body    string    // Markdown
     
-    // Requirements
-    Requirements []Requirement
+    // Requirements (from Discussion)
+    Requirements *RequirementsUnderstanding
     
     // Design
     Design DesignSpec
@@ -987,7 +1528,20 @@ By modeling these as separate agents with clear responsibilities:
 - Handoffs create natural checkpoints
 - Parallel work is possible (e.g., AI review while Human reviews)
 
-### 9.2 Why Structured Commands?
+### 9.2 Why Iterative Refinement?
+
+AI cannot perfectly understand requirements in one pass. The iterative loop:
+
+```
+Human states → AI paraphrases → Human corrects → AI updates → ... → Confirm
+```
+
+This ensures:
+- **Accuracy**: Requirements are precisely captured
+- **Alignment**: AI's understanding matches Human's intent
+- **Audit Trail**: Every correction is tracked
+
+### 9.3 Why Structured Commands?
 
 Natural language is ambiguous. "start the thing" could mean:
 - Start development
@@ -996,14 +1550,14 @@ Natural language is ambiguous. "start the thing" could mean:
 
 Slash commands (`/start-dev`) make intent explicit and unambiguous.
 
-### 9.3 Why Milestone-Based?
+### 9.4 Why Milestone-Based?
 
 Not every step needs human approval (that defeats the purpose of automation). But critical milestones do:
 - Requirements confirmed → prevents wasted development
 - Code reviewed → maintains quality
 - Deployment approved → prevents broken main
 
-### 9.4 Why Artifact Versioning?
+### 9.5 Why Artifact Versioning?
 
 Requirements evolve. The first draft might be incomplete. By tracking versions:
 - Every change is visible
