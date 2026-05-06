@@ -125,8 +125,8 @@ AI: 请先执行 /on <path> 设置项目上下文
 | | Human | AI |
 |---|-------|-----|
 | 发起 | 执行 `/on <path>` | |
-| 讨论迭代 | 提出需求 / 补充 / 修改 | 确认细节 / 更新文档 / 输出当前方案 |
-| 创建 Issue | 执行 `/new` | 读取确认文档，创建 GitHub Issue |
+| 讨论迭代 | 提出需求 / 补充 / 修改 | 确认细节 / 继续讨论 |
+| 创建 Issue | 执行 `/new` | 从 session 提取讨论内容，创建 GitHub Issue |
 
 ---
 
@@ -284,7 +284,6 @@ Review 和 Revise 可以重复迭代：
 │   /on <path> ──────────────────── 起点 + Discuss 模式            │
 │      │                                                         │
 │      │ Human 与 AI 迭代讨论                                     │
-│      │ AI 更新 .humera/discuss.md                              │
 │      │                                                         │
 │      │ Human 认为讨论充分                                       │
 │      │                                                         │
