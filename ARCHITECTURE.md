@@ -9,9 +9,9 @@
 │                           Human (IM Channel)                             │
 │                                                                          │
 │   /on ~/code/myapp                                                     │
-│   /discuss <idea>                                                       │
+│   [any message]  ← Discuss 模式                                         │
 │   /create-issue                                                         │
-│   /start-dev <issue>                                                    │
+│   /fix <issue>                                                           │
 │   /review <pr>                                                          │
 │   /revise <pr>                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -46,11 +46,12 @@
 │                                                                          │
 │   Command Types:                                                         │
 │   - CmdOn          → Project                                             │
-│   - CmdDiscuss     → Discuss                                             │
 │   - CmdCreateIssue → Discuss                                             │
-│   - CmdStartDev    → Develop                                             │
+│   - CmdFix         → Develop                                             │
 │   - CmdReview      → Review                                              │
 │   - CmdRevise      → Revise                                              │
+│                                                                          │
+│   Note: 无 slash command 的消息 → Discuss Handler                         │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     │ Command
@@ -60,6 +61,7 @@
 │                                                                          │
 │   Responsibility:                                                        │
 │   - 根据 Command.Type 分发到对应的 Handler                                │
+│   - 无 Command（普通消息）→ Discuss Handler                              │
 │                                                                          │
 │   Interface:                                                             │
 │   - Dispatch(Command, *Project) *Result                                  │
@@ -101,7 +103,7 @@
 │   │  Responsibility: │  │  Responsibility: │  │  Responsibility: │       │
 │   │  - 读取 git remote│  │  - Issue CRUD    │  │  - Chat          │       │
 │   │  - 项目路径解析    │  │  - PR CRUD       │  │  - Review        │       │
-│   │                  │  │  - Comments      │  │                  │       │
+│   │  - 设置讨论模式    │  │  - Comments      │  │                  │       │
 │   └──────────────────┘  └──────────────────┘  └──────────────────┘       │
 │                                                                          │
 │   ┌──────────────────┐  ┌──────────────────┐                           │
@@ -192,12 +194,11 @@ type Channel interface {
 type CommandType string
 
 const (
-    CmdOn          CommandType = "on"
-    CmdDiscuss     CommandType = "discuss"
-    CmdCreateIssue CommandType = "create-issue"
-    CmdStartDev    CommandType = "start-dev"
-    CmdReview      CommandType = "review"
-    CmdRevise      CommandType = "revise"
+    CmdOn          CommandType = "on"           // 切换项目
+    CmdCreateIssue CommandType = "create-issue" // 创建 Issue
+    CmdFix         CommandType = "fix"          // 编码开发
+    CmdReview      CommandType = "review"       // 代码审查
+    CmdRevise      CommandType = "revise"       // 修正
 )
 
 type Command struct {
@@ -208,6 +209,7 @@ type Command struct {
 
 type Parser interface {
     // 解析消息为命令
+    // 如果不是 slash command，返回 nil（由 Discuss Handler 处理）
     Parse(msg *Message) *Command
 }
 ```
@@ -218,14 +220,15 @@ type Parser interface {
 // dispatch/dispatch.go
 type Dispatcher interface {
     // 分发命令到对应 Handler
+    // cmd 为 nil 时，默认分发到 Discuss Handler
     Dispatch(ctx context.Context, cmd *Command, project *Project) (*Result, error)
 }
 
 type Result struct {
-    Display   Display
-    IssueURL  string
-    PRURL     string
-    Error     error
+    Display  Display
+    IssueURL string
+    PRURL    string
+    Error    error
 }
 ```
 
@@ -248,6 +251,12 @@ type Remote struct {
 type Resolver interface {
     // 根据路径解析项目
     Resolve(path string) (*Project, error)
+
+    // 设置当前项目上下文
+    SetCurrent(project *Project)
+
+    // 获取当前项目上下文
+    GetCurrent() *Project
 }
 ```
 
@@ -256,16 +265,16 @@ type Resolver interface {
 ```go
 // handler/discuss.go
 type DiscussHandler struct {
-    llm      LLMProvider
-    storage  Storage
-    github   GitHubClient
-    context  *DiscussContext  // 当前讨论状态（内存）
+    llm     LLMProvider
+    storage Storage
+    github  GitHubClient
+    context *DiscussContext  // 当前讨论状态（内存）
 }
 
 type DiscussContext struct {
-    Project   *Project
-    Messages  []Message
-    Document  *ConfirmDocument  // 确认文档（暂存）
+    Project  *Project
+    Messages []Message
+    Document *ConfirmDocument  // 确认文档（暂存）
 }
 
 type ConfirmDocument struct {
@@ -277,10 +286,13 @@ type ConfirmDocument struct {
 }
 
 // Handle 实现 TaskHandler 接口
+// 注意：Discuss Handler 处理两类输入：
+// 1. CmdCreateIssue → 创建 Issue
+// 2. 普通消息（cmd == nil）→ 讨论迭代
 func (h *DiscussHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
 
 // 子方法：
-// - discuss(cmd, context)     → 迭代确认
+// - discuss(msg, context)     → 迭代确认
 // - createIssue(context)     → 创建 Issue
 ```
 
@@ -289,8 +301,8 @@ func (h *DiscussHandler) Handle(ctx context.Context, cmd *Command, project *Proj
 ```go
 // handler/develop.go
 type DevelopHandler struct {
-    github   GitHubClient
-    coder    Coder
+    github GitHubClient
+    coder  Coder
 }
 
 // Handle 实现 TaskHandler 接口
@@ -436,8 +448,8 @@ type ReviewComment struct {
 
 ```go
 type ReviewResult struct {
-    Comments  []*ReviewComment
-    Summary   string
+    Comments []*ReviewComment
+    Summary  string
 }
 ```
 
