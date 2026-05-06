@@ -20,6 +20,35 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 | `/review <pr>` | 审查 | Review PR 代码，写入 GitHub Comment | — |
 | `/revise <pr>` | 修正 | 读取 Review 反馈，修改代码，push | Updated PR |
 
+### 2.1 路径格式
+
+`/on <path>` 中的 path 支持以下格式：
+
+| 格式 | 示例 | 解析 |
+|------|------|------|
+| 绝对路径 | `/Users/bin/code/myapp` | 直接使用 |
+| `~` 开头 | `~/code/myapp` | `~/` 替换为 homedir |
+| `~user` 开头 | `~bob/code/myapp` | `~user` 替换为该用户的 home |
+| `./` 或 `../` 开头 | `./code/myapp` | 相对当前工作目录 |
+| 非以上格式 | `code/myapp` | 默认视为 `~/code/myapp` |
+
+### 2.2 项目上下文
+
+执行 `/on <path>` 时：
+
+1. **解析路径**：根据上表规则展开为绝对路径
+2. **验证目录**：必须是存在的目录
+3. **读取 git remote**：从 `.git/config` 读取 origin remote，解析出 `owner/repo`
+4. **设置上下文**：保存 `workdir` 和 `repo` 信息
+
+### 2.3 参数格式
+
+| Command | 参数格式 | 示例 |
+|---------|---------|------|
+| `/fix` | Issue URL 或 `owner/repo#number` | `/fix https://github.com/owner/repo/issues/123` 或 `/fix owner/repo#123` |
+| `/review` | PR URL 或 `owner/repo#number` | `/review https://github.com/owner/repo/pull/456` 或 `/review owner/repo#456` |
+| `/revise` | PR URL 或 `owner/repo#number` | `/revise https://github.com/owner/repo/pull/456` 或 `/revise owner/repo#456` |
+
 ---
 
 ## 3. Task: Discuss（需求讨论）
@@ -31,7 +60,7 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 | | 内容 |
 |---|------|
 | **Input** | Human 的消息（新功能需求或 Bug 描述） |
-| **Output** | 确认文档（暂存），等待 `/new` |
+| **Output** | 确认文档（存储在项目中），等待 `/new` |
 
 ### 3.2 流程
 
@@ -39,7 +68,9 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 Human: /on ~/code/myapp
        │
        ▼
-Project context set
+解析路径 → 验证目录 → 读取 git remote → 设置项目上下文
+       │
+       ▼
 自动进入 Discuss 模式
        │
        ▼
@@ -67,42 +98,68 @@ Human: 确认（回复"确认"或类似明确答复）
 等待 Human 执行 /new
 ```
 
-### 3.3 产物格式
+### 3.3 内部文档
 
-```
-═══════════════════════════════════════
-需求确认文档
-═══════════════════════════════════════
+讨论过程中，AI 在项目目录下维护一个文档文件（`.humera/discuss.md`）：
 
-标题：[标题]
+**文档结构：**
 
-功能：
+```markdown
+# 讨论记录
+
+## 项目信息
+- Workdir: /Users/bin/code/myapp
+- Repo: owner/repo
+- 创建时间: 2025-01-01T00:00:00Z
+- 最后更新: 2025-01-01T00:00:00Z
+
+## 迭代历史
+
+### 迭代 1
+**Human**: [原始需求]
+**AI 确认**: [AI 的理解和追问]
+**Human 补充**: [补充内容]
+...
+
+### 迭代 N
+**Human**: [最新补充]
+**AI 确认**: [最新理解]
+...
+
+## 当前方案
+
+### 标题
+[标题]
+
+### 功能
 - [具体功能点]
 
-范围：
+### 范围
 - 包含：[包含哪些]
 - 不包含：[不包含哪些]
 
-技术方案：
-- [实现方式]
+### 技术方案
+[实现方式]
 
-验收标准：
+### 验收标准
 - [ ] [标准 1]
 - [ ] [标准 2]
-
-═══════════════════════════════════════
-确认后执行 /new 创建 Issue
-═══════════════════════════════════════
 ```
+
+**说明：**
+- 每次 Human 补充后，AI 更新文档
+- 迭代历史保留所有讨论过程（可以看到反复、矛盾）
+- 当前方案是最新、最完整的版本
+- Human 确认"确认"时，确认的是当前方案
 
 ### 3.4 角色
 
 | | Human | AI |
 |---|-------|-----|
 | 发起 | 执行 `/on <path>` | |
-| 讨论迭代 | 提出需求 / 补充 / 修改 | 确认细节 / 确认理解 |
-| 最终确认 | 回复"确认"或类似明确答复 | 输出确认文档 |
-| 创建 Issue | 执行 `/new` | 创建 GitHub Issue |
+| 讨论迭代 | 提出需求 / 补充 / 修改 | 确认细节 / 更新文档 / 输出当前方案 |
+| 最终确认 | 回复"确认"或类似明确答复 | 标记文档为已确认 |
+| 创建 Issue | 执行 `/new` | 读取确认文档，创建 GitHub Issue |
 
 ---
 
@@ -112,7 +169,7 @@ Human: 确认（回复"确认"或类似明确答复）
 
 | | 内容 |
 |---|------|
-| **Input** | Discuss 阶段确认的需求文档 |
+| **Input** | `.humera/discuss.md` 中已确认的"当前方案" |
 | **Output** | GitHub Issue |
 
 ### 4.2 角色
@@ -120,6 +177,7 @@ Human: 确认（回复"确认"或类似明确答复）
 | | Human | AI |
 |---|-------|-----|
 | 发起 | 执行 `/new` | |
+| 读取文档 | | 读取 `.humera/discuss.md` 中的"当前方案" |
 | 创建 | | 调用 GitHub API 创建 Issue |
 
 ---
@@ -137,7 +195,7 @@ Human: 确认（回复"确认"或类似明确答复）
 
 | | Human | AI |
 |---|-------|-----|
-| 发起 | 执行 `/fix <issue-url>` | |
+| 发起 | 执行 `/fix <issue>` | |
 | 读取 Issue | | 读取 GitHub Issue 详情 |
 | 分析需求 | | 分析需求 |
 | 编码实现 | | 编码实现 |
@@ -159,7 +217,7 @@ Human: 确认（回复"确认"或类似明确答复）
 
 | | Human | AI |
 |---|-------|-----|
-| 发起 | 执行 `/review <pr-url>` | |
+| 发起 | 执行 `/review <pr>` | |
 | 读取代码 | | 读取 PR 代码 |
 | 代码审查 | | 专业方式 review |
 | 写入 Comment | | 写入 GitHub PR Comment |
@@ -189,7 +247,7 @@ Human: 确认（回复"确认"或类似明确答复）
 
 | | Human | AI |
 |---|-------|-----|
-| 发起 | 执行 `/revise <pr-url>` | |
+| 发起 | 执行 `/revise <pr>` | |
 | 读取反馈 | | 读取 PR 的 Review Comments |
 | 分析反馈 | | 分析所有 review 反馈 |
 | 修改代码 | | 修改代码 |
@@ -214,10 +272,16 @@ Review 和 Revise 可以重复迭代：
 │      │ Human 与 AI 迭代讨论                                     │
 │      │                                                         │
 │      ▼                                                         │
+│   .humera/discuss.md ────────────── 内部文档                    │
+│      │                                                         │
+│      ▼                                                         │
+│   Human: 确认"确认" ─────────────── 最终确认                     │
+│      │                                                         │
+│      ▼                                                         │
 │   /new ─────────────────────────→ GitHub Issue                  │
 │      │                                                         │
 │      ▼                                                         │
-│   /fix <issue> ──────────────────→ GitHub PR                    │
+│   /fix <issue> ──────────────────→ GitHub PR                   │
 │                                              │                   │
 │                                              │ Human 在 GitHub   │
 │                                              │ review PR         │
@@ -234,3 +298,19 @@ Review 和 Revise 可以重复迭代：
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 9. 文件结构
+
+```
+project/
+├── .humera/
+│   └── discuss.md      # 讨论记录文档
+├── .git/
+└── ...
+```
+
+- `.humera/` 目录由 Humera 自动创建
+- `discuss.md` 在 Discuss 开始时创建，结束时标记"已确认"
+- 创建 Issue 后，`discuss.md` 保留（供追溯）
