@@ -214,6 +214,178 @@ type Tool interface {
 // - FileSystemTool      (Read, Write, expandPath)
 ```
 
+### 1.4 Nested Agent Loop (Supervisor Pattern)
+
+当 Humera 委托 Claude Code / OpenCode 时，被委托的 CLI **本身也是一个 Agent Loop**。我们称之为 **Coder Agent**。
+
+Humera 和 Coder Agent 的关系是 **Supervisor - Worker** 模式：
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Humera Agent Loop                                 │
+│                                                                          │
+│   Handler (TDD/Fix/Revise)                                               │
+│        │                                                                │
+│        │ spawn Coder Agent (Claude Code / OpenCode)                     │
+│        ▼                                                                │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                  Coder Agent Loop                                │   │
+│   │                                                                  │   │
+│   │   while (iter < max_iter):                                      │   │
+│   │       1. LLM generates code                                     │   │
+│   │       2. Execute tools (git, file, shell)                       │   │
+│   │       3. Return output                                          │   │
+│   │                                                                  │   │
+│   │   Tools: Read, Write, Bash, Git, Search                         │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│        │                                                                │
+│        │ output                                                          │
+│        ▼                                                                │
+│   Humera 检查结果是否符合要求                                             │
+│        │                                                                │
+│        ├── 符合 → 继续下一步                                              │
+│        └── 不符合 → 反馈给 Coder Agent，重新生成                          │
+│                    (继续 Coder Agent Loop)                               │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Coder 接口设计：**
+
+```go
+// coder/coder.go
+
+// Coder 是对外部 Agent CLI 的封装
+// 它内部有自己的 Agent Loop，但我们需要：
+// 1. 验证输出是否符合要求
+// 2. 如果不符合，迭代沟通
+
+type Coder interface {
+    // Run 执行一次完整的 coding 任务
+    // 内部可能有多轮 LLM ↔ 工具 的循环
+    // 返回最终结果
+    Run(ctx context.Context, req *CodingRequest) (*CodingResult, error)
+}
+
+type CodingRequest struct {
+    Task     string       // 任务描述
+    Context  string       // 上下文（Issue 内容、讨论历史）
+    Workdir  string       // 工作目录
+    Mode     CodingMode   // stub | implement | revise
+}
+
+type CodingMode string
+
+const (
+    ModeStub      CodingMode = "stub"      // TDD: stub + 测试
+    ModeImplement CodingMode = "implement" // 实现逻辑
+    ModeRevise    CodingMode = "revise"    // 根据反馈修正
+)
+
+type CodingResult struct {
+    Success   bool
+    Output    string       // 最终输出
+    Diff      string       // 代码变更
+    Error     error
+    IterCount int          // 迭代次数
+}
+
+// Validator 验证输出是否符合要求
+type Validator interface {
+    Validate(req *CodingRequest, result *CodingResult) *ValidationResult
+}
+
+type ValidationResult struct {
+    Pass    bool
+    Feedback string  // 不通过的原因，用于反馈给 Coder
+}
+
+// CoderAgent 包含嵌套的 Agent Loop
+type CoderAgent struct {
+    cli       CoderCLI           // Claude Code / OpenCode
+    validator Validator
+    maxRetry  int
+}
+
+func (c *CoderAgent) Run(ctx context.Context, req *CodingRequest) (*CodingResult, error) {
+    // 1. 执行 Coder
+    result, err := c.cli.Run(ctx, req)
+    if err != nil {
+        return nil, err
+    }
+
+    // 2. 验证结果
+    validation := c.validator.Validate(req, result)
+    if validation.Pass {
+        return result, nil
+    }
+
+    // 3. 不通过，反馈给 Coder 重试
+    for i := 0; i < c.maxRetry; i++ {
+        result, err = c.cli.Revise(ctx, req, validation.Feedback)
+        if err != nil {
+            return nil, err
+        }
+
+        validation = c.validator.Validate(req, result)
+        if validation.Pass {
+            return result, nil
+        }
+    }
+
+    // 4. 超过重试次数，返回失败
+    return result, fmt.Errorf("validation failed after %d retries: %s", c.maxRetry, validation.Feedback)
+}
+
+// CoderCLI 是对外部 CLI 的封装
+type CoderCLI interface {
+    // Run 执行一次任务
+    Run(ctx context.Context, req *CodingRequest) (*CodingResult, error)
+
+    // Revise 根据反馈修正
+    Revise(ctx context.Context, req *CodingRequest, feedback string) (*CodingResult, error)
+}
+
+// ClaudeCodeCLI 实现
+type ClaudeCodeCLI struct {
+    model string
+}
+
+func (c *ClaudeCodeCLI) Run(ctx context.Context, req *CodingRequest) (*CodingResult, error) {
+    // 调用 claude --print 执行任务
+    cmd := exec.CommandContext(ctx, "claude",
+        "--print",
+        "--model", c.model,
+        "--prompt", buildPrompt(req),
+    )
+    cmd.Dir = req.Workdir
+
+    output, err := cmd.CombinedOutput()
+    return &CodingResult{
+        Success:   err == nil,
+        Output:    string(output),
+        IterCount: 1, // Claude Code 内部自己有多轮 loop
+    }, err
+}
+
+func (c *ClaudeCodeCLI) Revise(ctx context.Context, req *CodingRequest, feedback string) (*CodingResult, error) {
+    // 调用 claude --print 执行修正
+    cmd := exec.CommandContext(ctx, "claude",
+        "--print",
+        "--model", c.model,
+        "--prompt", buildRevisePrompt(req, feedback),
+    )
+    cmd.Dir = req.Workdir
+
+    output, err := cmd.CombinedOutput()
+    return &CodingResult{
+        Success:   err == nil,
+        Output:    string(output),
+        IterCount: 1,
+    }, err
+}
+```
+
 ---
 
 ## 2. Module Boundaries
@@ -235,7 +407,7 @@ type Tool interface {
 | **ReviewHandler** | Handler | 代码审查 | `Handle(ctx, pr, session) *Result` |
 | **ReviseHandler** | Handler | 代码修正 | `Handle(ctx, pr, session) *Result` |
 | **GitHub** | Tool | GitHub API | `GetIssue()`, `CreateIssue()`, `CreatePR()`, etc. |
-| **Coder** | Tool | 编码执行 | `TDD()`, `Implement()`, `Revise()` |
+| **Coder** | Tool | 嵌套 Agent Loop | `Run()`, `Revise()`, `Validate()` |
 | **PathResolver** | Tool | 路径解析 | `Resolve(path) string` |
 
 ### 2.2 Dependency Rules
@@ -1044,10 +1216,11 @@ humera/
 ├── github/                        # GitHub API
 │   └── client.go                 # GitHubClient interface
 │
-├── coder/                         # 编码代理
-│   ├── agent.go                  # CodingAgent interface
-│   ├── claude_code.go            # Claude Code implementation
-│   └── opencode.go               # OpenCode implementation
+├── coder/                         # 编码代理（嵌套 Agent Loop）
+│   ├── coder.go                  # Coder interface + Validator
+│   ├── agent.go                  # CoderAgent (Supervisor Loop)
+│   ├── claude_code.go            # ClaudeCodeCLI implementation
+│   └── opencode.go               # OpenCode CLI implementation
 │
 ├── path/                          # 路径解析
 │   └── resolver.go               # expandPath logic
