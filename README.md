@@ -1,59 +1,80 @@
 # Humera
 
-Humera is a **team-style AI-assisted software engineering platform** for solo developers. It transforms a single developer into a complete engineering team by coordinating multiple AI agents through structured workflows.
+Humera is a **Human-controlled AI collaboration tool** for software engineering. Unlike autonomous agent systems, Humera keeps Human in the driver's seat — AI assists with confirmation and suggestions, but all final actions are executed by Human.
 
-## Overview
-
-Humera follows a **Human-in-the-Loop** architecture where the Human acts as Team Lead and AI agents execute specific roles:
+## Core Concept
 
 ```
-Human (Team Lead)
-    │
-    │ 1. Discuss requirements → AI paraphrases → Human confirms
-    │ 2. /create-issue → GitHub Issue created
-    │ 3. /start-dev → Dev Agent implements → PR created
-    │ 4. AI Review → Human Review
-    │ 5. /merge → Merged to main
-    │
-    ▼
-AI Team Members (PM Agent, Dev Agent, Reviewer Agent)
+Human 提出 → AI 具体化确认 → Human 确认 → Human 执行 slash command
 ```
 
-## Key Features
+**AI never executes final actions.** AI only:
+1. Confirms and specifies what Human proposed
+2. Provides suggestions
 
-- **Structured Workflow**: Project-level milestones with human approval checkpoints
-- **Team Simulation**: PM, Dev, and Reviewer agents work together
-- **Versioned Artifacts**: Every requirement, issue, and PR is versioned
-- **Multi-Channel**: Telegram, Feishu, WhatsApp, Discord, CLI support
-- **Engineering Precision**: Every step has clear input, output, and verification
+**Human controls everything:**
+- Creating Issues
+- Pushing Code
+- Merging PRs
 
-## Architecture
+## Task Types
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation.
+| Task | AI Output | Human Action |
+|------|-----------|--------------|
+| **Discuss** | Confirmed requirements document | `/create-issue` |
+| **Develop** | Code implementation suggestions | `/start-dev` → push code |
+| **Review** | PR review comments | Output to GitHub PR |
+| **Revise** | Fix suggestions | `/revise` → push fixes |
 
 ## Quick Start
 
 ```bash
-# Clone and build
-go build ./cmd/humera
+# Start Humera
+humera
 
-# Run with CLI channel
-./humera --channel=cli
+# Switch project (reads git remote automatically)
+> /on ~/code/myapp
+Project: github.com/owner/repo
 
-# Or connect to Telegram
-./humera --channel=telegram --telegram-token=YOUR_TOKEN
+# Discuss requirements
+> 我要给 API 加 rate limiting
+[AI assists with confirmation...]
+
+# Create issue (Human executes)
+> /create-issue
+
+# Start development
+> /start-dev https://github.com/owner/repo/issues/123
+[AI assists with implementation...]
+
+# Review PR
+> /review https://github.com/owner/repo/pull/456
+[AI outputs review to GitHub PR]
 ```
 
-## Commands
+## Architecture
 
-| Command | Description |
-|---------|-------------|
-| `/switch <project>` | Switch to another project |
-| `/create-issue` | Create GitHub Issue from discussion |
-| `/start-dev` | Start development for current issue |
-| `/ai-review` | Run AI code review |
-| `/merge` | Merge current PR |
-| `/revise` | Request fixes from Dev Agent |
+```
+humera/
+├── channel/          # IM platforms (Telegram/Feishu/CLI/...)
+├── command/          # Slash command parsing
+├── assist/           # AI assistance
+│   ├── discuss.go       # Requirements discussion
+│   ├── review.go        # Code review
+│   └── suggest.go        # Fix suggestions
+├── project/          # Project context (from git remote)
+├── artifact/         # Artifacts (Issue/Code/PR Comment)
+└── infra/            # Storage, logging
+```
+
+## Supported Channels
+
+- Telegram
+- Feishu (Lark)
+- Discord
+- WhatsApp
+- CLI
+- WebSocket
 
 ## License
 
