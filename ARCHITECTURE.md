@@ -1,220 +1,203 @@
-# Humera Architecture
+# Humera Technical Architecture
 
-## 1. Design Philosophy
+## 1. Architecture Overview
 
-**Humera = Human 掌控的 AI 协作工具**
-
-Human 是掌控者和执行者，AI 负责协助确认和建议。所有 slash command 由 Human 执行，AI 只负责过程协助。
-
-### 1.1 Core Principles
-
-| Principle | Description |
-|-----------|-------------|
-| **Human in Control** | Human 发起所有任务，执行所有 slash command |
-| **AI Assists Only** | AI 负责确认、建议、输出，不执行最终产物 |
-| **Task Isolation** | 每个任务独立，没有跨任务的状态关联 |
-| **Project from Git** | 项目上下文从 git remote 读取 |
-| **Explicit Commands** | 所有操作通过 slash command 显式指定 |
-
-### 1.2 Comparison
-
-| Dimension | Auto Agent | Humera |
-|-----------|------------|--------|
-| Human Role | Observer | Controller + Executor |
-| AI Role | Executor | Assistant |
-| Output | AI creates directly | Human confirms, then executes |
-| Flow | Pipeline / State Machine | Independent Tasks |
-
----
-
-## 2. Task Definitions
-
-Humera 定义了 4 种独立任务：
-
-| Task | Human Action | AI Action | Output |
-|------|-------------|-----------|--------|
-| **Discuss** | 提出需求 + 执行 `/create-issue` | 确认细节 + 整合文档 | GitHub Issue |
-| **Develop** | 执行 `/start-dev <issue>` | 编码 + push + PR | GitHub PR |
-| **Review** | 执行 `/review <pr>` | review + 写 comment | PR Comment |
-| **Revise** | 执行 `/revise <pr>` | 读反馈 + 修改 + push | Updated PR |
-
----
-
-## 3. Task 1: Discuss（需求讨论）
-
-**起点：所有功能开发和 Bug 修改都从这里开始**
-
-### 3.1 Flow
-
-| Stage | Human | AI |
-|-------|-------|-----|
-| 1 | 提出简单需求 | |
-| 2 | | 确认具体细节 |
-| 3 | 补充 / 修改 | |
-| 4 | | 确认理解是否正确 |
-| 5 | ← 循环直到双方确认 → | |
-| 6 | | 整合输出最终确认文档 |
-| 7 | 确认最终文档 | |
-| 8 | 执行 `/create-issue` | |
-| 9 | | 把确认文档写入 GitHub Issue |
-| 10 | | 创建 Issue |
-| Output | **包含最终讨论结论的 GitHub Issue** |
-
-### 3.2 AI Output Example
+### 1.1 System Flow
 
 ```
-需求确认文档
-═══════════════════════════════════
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Human (IM Channel)                             │
+│                                                                          │
+│   /on ~/code/myapp                                                     │
+│   /discuss <idea>                                                       │
+│   /create-issue                                                         │
+│   /start-dev <issue>                                                    │
+│   /review <pr>                                                          │
+│   /revise <pr>                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Message
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Channel                                     │
+│                                                                          │
+│   Responsibility:                                                        │
+│   - 连接 IM 平台（Telegram/Feishu/Discord/WhatsApp/CLI/WebSocket）       │
+│   - 消息格式标准化                                                       │
+│   - 返回格式化结果给 Human                                               │
+│                                                                          │
+│   Interface:                                                             │
+│   - Receive() *Message                                                   │
+│   - Send(Display) error                                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Message
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Command                                     │
+│                                                                          │
+│   Responsibility:                                                        │
+│   - 解析 slash command                                                   │
+│   - 识别命令类型                                                         │
+│   - 提取参数                                                             │
+│                                                                          │
+│   Interface:                                                             │
+│   - Parse(Message) *Command                                              │
+│                                                                          │
+│   Command Types:                                                         │
+│   - CmdOn          → Project                                             │
+│   - CmdDiscuss     → Discuss                                             │
+│   - CmdCreateIssue → Discuss                                             │
+│   - CmdStartDev    → Develop                                             │
+│   - CmdReview      → Review                                              │
+│   - CmdRevise      → Revise                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Command
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                             Dispatch                                     │
+│                                                                          │
+│   Responsibility:                                                        │
+│   - 根据 Command.Type 分发到对应的 Handler                                │
+│                                                                          │
+│   Interface:                                                             │
+│   - Dispatch(Command, *Project) *Result                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┼───────────────┐
+                    │               │               │
+                    ▼               ▼               ▼
+┌─────────────────────────┐ ┌─────────────────────────┐ ┌─────────────────────────┐
+│        Discuss          │ │        Develop          │ │        Review           │
+│                         │ │                         │ │                         │
+│   Context:              │ │   Dependencies:          │ │   Dependencies:         │
+│   - 当前讨论内容         │ │   - GitHub              │ │   - GitHub              │
+│   - 确认文档（暂存）     │ │   - Coder               │ │   - LLM Provider        │
+│                         │ │                         │ │                         │
+│   Output:                │ │   Output:                │ │   Output:                │
+│   - 确认文档（内存）      │ │   - GitHub PR           │ │   - PR Comment          │
+└─────────────────────────┘ └─────────────────────────┘ └─────────────────────────┘
+                                        │
+                                        │
+                                        ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Revise                                     │
+│                                                                          │
+│   Dependencies:                                                          │
+│   - GitHub                                                              │
+│   - Coder                                                               │
+│                                                                          │
+│   Output:                                                                │
+│   - Updated GitHub PR                                                    │
+└─────────────────────────────────────────────────────────────────────────┘
 
-标题：给 API 添加 rate limiting
-
-功能：
-- 给所有 REST API 添加 rate limiting
-
-范围：
-- 包含：REST API
-- 不包含：GraphQL
-
-技术方案：
-- Redis + sliding window
-- 限制：200 req/min per user
-
-验收标准：
-- [ ] 超过限制返回 429
-- [ ] 计数器正确重置
-
-───────────────────────────────────
-确认后执行 /create-issue
-```
-
-### 3.3 Command
-
-```bash
-# 开始讨论
-/discuss 我要给 API 加 rate limiting
-
-# 创建 Issue（讨论结束后）
-/create-issue
-```
-
----
-
-## 4. Task 2: Develop（编码）
-
-### 4.1 Flow
-
-| Stage | Human | AI |
-|-------|-------|-----|
-| 1 | 执行 `/start-dev <issue-url>` | |
-| 2 | | 读取 GitHub Issue 详情 |
-| 3 | | 分析需求，开始编码 |
-| 4 | | push 代码到分支 |
-| 5 | | 创建 PR |
-| Output | **代码 push 到 GitHub，PR 创建** |
-
-### 4.2 Notes
-
-- Human 指定要开发的 issue，AI 自主完成
-- 没有中间的确认环节
-- AI 负责：编码、push、PR 创建
-
-### 4.3 Command
-
-```bash
-/start-dev https://github.com/owner/repo/issues/123
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            Infrastructure                               │
+│                                                                          │
+│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐       │
+│   │     Project      │  │    GitHub API    │  │   LLM Provider   │       │
+│   │                  │  │                  │  │                  │       │
+│   │  Responsibility: │  │  Responsibility: │  │  Responsibility: │       │
+│   │  - 读取 git remote│  │  - Issue CRUD    │  │  - Chat          │       │
+│   │  - 项目路径解析    │  │  - PR CRUD       │  │  - Review        │       │
+│   │                  │  │  - Comments      │  │                  │       │
+│   └──────────────────┘  └──────────────────┘  └──────────────────┘       │
+│                                                                          │
+│   ┌──────────────────┐  ┌──────────────────┐                           │
+│   │      Coder       │  │     Storage      │                           │
+│   │                  │  │                  │                           │
+│   │  Responsibility: │  │  Responsibility: │                           │
+│   │  - 代码实现        │  │  - Discuss 暂存  │                           │
+│   │  - 代码修改        │  │  - 项目配置      │                           │
+│   └──────────────────┘  └──────────────────┘                           │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 5. Task 3: Review（代码审查）
+## 2. Module Boundaries
 
-### 5.1 Flow
+### 2.1 Module List
 
-| Stage | Human | AI |
-|-------|-------|-----|
-| 1 | 执行 `/review <pr-url>` | |
-| 2 | | 读取 PR 代码 |
-| 3 | | 专业方式 review 代码 |
-| 4 | | 把修改意见写入 GitHub PR Comment |
-| Output | **Review 意见在 GitHub PR 上** |
+| Module | Responsibility | Boundary |
+|--------|---------------|----------|
+| **Channel** | IM 消息收发 | 输入/输出的唯一通道 |
+| **Command** | 解析 slash command | 只解析，不执行 |
+| **Dispatch** | 分发命令到 Handler | 路由，无业务逻辑 |
+| **Discuss** | 需求讨论 | 业务：讨论流程 |
+| **Develop** | 编码开发 | 业务：开发流程 |
+| **Review** | 代码审查 | 业务：review 流程 |
+| **Revise** | 代码修正 | 业务：修正流程 |
+| **Project** | 项目上下文 | 数据：从 git remote 读取 |
+| **GitHub** | GitHub API | 外部依赖：GitHub |
+| **LLM** | LLM 调用 | 外部依赖：LLM Provider |
+| **Coder** | 编码执行 | 外部依赖：Claude Code / OpenCode |
+| **Storage** | 本地存储 | 数据持久化 |
 
-### 5.2 Command
+### 2.2 Dependency Rules
 
-```bash
-/review https://github.com/owner/repo/pull/456
 ```
+Channel → Command → Dispatch → [Discuss | Develop | Review | Revise]
+                                       ↓
+                              [Project | GitHub | LLM | Coder | Storage]
+```
+
+**依赖方向（只能依赖下游）：**
+- Channel 可以被 Command 依赖（消息输入）
+- Command 可以被 Dispatch 依赖（命令输入）
+- Dispatch 可以依赖所有 Handler
+- Handler 可以依赖 Project、GitHub、LLM、Coder、Storage
+
+**禁止反向依赖：**
+- Handler 不能依赖 Dispatch
+- Command 不能依赖 Channel
+- 上游模块不能依赖下游模块
 
 ---
 
-## 6. Task 4: Revise（修正）
+## 3. Module Interfaces
 
-### 6.1 Flow
-
-| Stage | Human | AI |
-|-------|-------|-----|
-| 1 | 执行 `/revise <pr-url>` | |
-| 2 | | 读取 PR 及 Review Comments |
-| 3 | | 分析 Review 反馈 |
-| 4 | | 修改代码 |
-| 5 | | push 代码到远端 |
-| Output | **修正代码 push 到 GitHub** |
-
-### 6.2 Command
-
-```bash
-/revise https://github.com/owner/repo/pull/456
-```
-
----
-
-## 7. Module Architecture
-
-### 7.1 Module Overview
-
-```
-humera/
-├── channel/          # 消息入口和出口
-├── command/          # slash command 解析
-├── task/             # 任务处理器
-│   ├── discuss.go       # 需求讨论
-│   ├── develop.go       # 编码
-│   ├── review.go        # 代码审查
-│   └── revise.go        # 修正
-├── project/          # 项目上下文
-├── provider/         # LLM 调用
-├── github/           # GitHub API
-└── infra/            # 存储、日志
-```
-
-### 7.2 Channel
-
-消息入口和出口，支持多种 IM 平台。
+### 3.1 Channel
 
 ```go
+// channel/channel.go
 type Channel interface {
-    Send(ctx context.Context, msg Display) error
+    // 接收 Human 消息
     Receive(ctx context.Context) (*Message, error)
-    Start(ctx context.Context, handler Handler) error
+
+    // 发送消息给 Human
+    Send(ctx context.Context, display Display) error
+
+    // 启动监听
+    Start(ctx context.Context, handler MessageHandler) error
+
+    // 停止监听
     Stop(ctx context.Context) error
 }
 
-// Supported: Telegram, Feishu, Discord, WhatsApp, CLI, WebSocket
+// 支持的实现：
+// - TelegramChannel
+// - FeishuChannel
+// - DiscordChannel
+// - WhatsAppChannel
+// - CLIChannel
+// - WebSocketChannel
 ```
 
-### 7.3 Command
-
-解析 slash command，识别任务类型。
+### 3.2 Command
 
 ```go
+// command/command.go
 type CommandType string
 
 const (
-    CmdOn          CommandType = "on"           // 切换项目
-    CmdDiscuss     CommandType = "discuss"      // 需求讨论
-    CmdCreateIssue CommandType = "create-issue" // 创建 Issue
-    CmdStartDev    CommandType = "start-dev"   // 开始开发
-    CmdReview      CommandType = "review"      // 代码审查
-    CmdRevise      CommandType = "revise"      // 修正
+    CmdOn          CommandType = "on"
+    CmdDiscuss     CommandType = "discuss"
+    CmdCreateIssue CommandType = "create-issue"
+    CmdStartDev    CommandType = "start-dev"
+    CmdReview      CommandType = "review"
+    CmdRevise      CommandType = "revise"
 )
 
 type Command struct {
@@ -222,229 +205,352 @@ type Command struct {
     Raw    string
     Params map[string]string
 }
+
+type Parser interface {
+    // 解析消息为命令
+    Parse(msg *Message) *Command
+}
 ```
 
-| Input | Command | Handler |
-|-------|---------|---------|
-| `/on <path>` | CmdOn | Project |
-| `/discuss <idea>` | CmdDiscuss | Discuss |
-| `/create-issue` | CmdCreateIssue | Discuss |
-| `/start-dev <issue>` | CmdStartDev | Develop |
-| `/review <pr>` | CmdReview | Review |
-| `/revise <pr>` | CmdRevise | Revise |
-| 其他 | CmdDiscuss | Discuss |
-
-### 7.4 Project
-
-项目上下文从 git remote 读取。
+### 3.3 Dispatch
 
 ```go
+// dispatch/dispatch.go
+type Dispatcher interface {
+    // 分发命令到对应 Handler
+    Dispatch(ctx context.Context, cmd *Command, project *Project) (*Result, error)
+}
+
+type Result struct {
+    Display   Display
+    IssueURL  string
+    PRURL     string
+    Error     error
+}
+```
+
+### 3.4 Project
+
+```go
+// project/project.go
 type Project struct {
-    Path   string   // 本地路径
-    Remote Remote   // Git remote 信息
-    Branch string   // 当前分支
+    Path   string
+    Remote Remote
+    Branch string
 }
 
 type Remote struct {
-    URL   string   // 例如 github.com/owner/repo
+    URL   string  // 例如 github.com/owner/repo
     Owner string
     Repo  string
 }
-```
 
-**Project Resolution:**
-
-```
-/on ~/code/myapp
-      │
-      ▼
-cd ~/code/myapp
-git remote -v
-      │
-      ▼
-github.com/owner/repo
-```
-
-### 7.5 Task Handlers
-
-每个任务类型对应一个 handler。
-
-```go
-type TaskHandler interface {
-    TaskType() CommandType
-    Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
+type Resolver interface {
+    // 根据路径解析项目
+    Resolve(path string) (*Project, error)
 }
 ```
 
-#### 7.5.1 Discuss Handler
+### 3.5 Discuss Handler
 
 ```go
+// handler/discuss.go
 type DiscussHandler struct {
     llm      LLMProvider
+    storage  Storage
     github   GitHubClient
-    discuss  *DiscussContext  // 当前讨论状态
+    context  *DiscussContext  // 当前讨论状态（内存）
 }
 
-func (h *DiscussHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error) {
-    switch cmd.Type {
-    case CmdDiscuss:
-        // 接收 Human 的需求，开始或继续讨论
-        return h.discuss(cmd.Raw, project)
-
-    case CmdCreateIssue:
-        // 创建 Issue
-        return h.createIssue(project)
-    }
+type DiscussContext struct {
+    Project   *Project
+    Messages  []Message
+    Document  *ConfirmDocument  // 确认文档（暂存）
 }
+
+type ConfirmDocument struct {
+    Title     string
+    Features  []string
+    Scope     Scope
+    Solution  string
+    Criteria  []string
+}
+
+// Handle 实现 TaskHandler 接口
+func (h *DiscussHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
+
+// 子方法：
+// - discuss(cmd, context)     → 迭代确认
+// - createIssue(context)     → 创建 Issue
 ```
 
-#### 7.5.2 Develop Handler
+### 3.6 Develop Handler
 
 ```go
+// handler/develop.go
 type DevelopHandler struct {
-    llm     LLMProvider
-    github  GitHubClient
-    coder   Coder  // Claude Code / OpenCode
+    github   GitHubClient
+    coder    Coder
 }
 
-func (h *DevelopHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error) {
-    // 1. 读取 Issue 详情
-    issue := h.github.GetIssue(cmd.Params["issue_url"])
-
-    // 2. 编码
-    diff := h.coder.Implement(issue)
-
-    // 3. push + PR
-    pr := h.github.CreatePR(project, diff)
-
-    return &Result{PR: pr}
-}
+// Handle 实现 TaskHandler 接口
+func (h *DevelopHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
 ```
 
-#### 7.5.3 Review Handler
+### 3.7 Review Handler
 
 ```go
+// handler/review.go
 type ReviewHandler struct {
     llm    LLMProvider
     github GitHubClient
 }
 
-func (h *ReviewHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error) {
-    // 1. 读取 PR
-    pr := h.github.GetPR(cmd.Params["pr_url"])
-
-    // 2. review 代码
-    review := h.llm.Review(pr.Diff)
-
-    // 3. 写入 PR Comment
-    h.github.PostReviewComment(pr, review)
-
-    return &Result{Review: review}
-}
+// Handle 实现 TaskHandler 接口
+func (h *ReviewHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
 ```
 
-#### 7.5.4 Revise Handler
+### 3.8 Revise Handler
 
 ```go
+// handler/revise.go
 type ReviseHandler struct {
-    llm    LLMProvider
     github GitHubClient
     coder  Coder
 }
 
-func (h *ReviseHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error) {
-    // 1. 读取 PR 及其 Review Comments
-    pr := h.github.GetPR(cmd.Params["pr_url"])
-    comments := h.github.GetReviewComments(pr)
+// Handle 实现 TaskHandler 接口
+func (h *ReviseHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
+```
 
-    // 2. 分析反馈
-    feedback := h.parseFeedback(comments)
+### 3.9 GitHub Client
 
-    // 3. 修改代码
-    diff := h.coder.Revise(pr, feedback)
+```go
+// github/github.go
+type GitHubClient interface {
+    // Issue
+    GetIssue(ctx context.Context, url string) (*Issue, error)
+    CreateIssue(ctx context.Context, project *Project, doc *ConfirmDocument) (*Issue, error)
 
-    // 4. push
-    h.github.PushAndUpdatePR(pr, diff)
+    // PR
+    GetPR(ctx context.Context, url string) (*PR, error)
+    CreatePR(ctx context.Context, project *Project, branch string, doc *ConfirmDocument) (*PR, error)
+    GetReviewComments(ctx context.Context, pr *PR) ([]*ReviewComment, error)
 
-    return &Result{Updated: true}
+    // Comments
+    PostReviewComment(ctx context.Context, pr *PR, review *ReviewResult) error
+
+    // Push
+    PushBranch(ctx context.Context, project *Project, branch string) error
 }
 ```
 
-### 7.6 Provider
-
-LLM 调用抽象。
+### 3.10 LLM Provider
 
 ```go
+// provider/llm.go
 type LLMProvider interface {
+    // 对话
     Chat(ctx context.Context, prompt string) (string, error)
+
+    // 代码审查
     Review(ctx context.Context, diff string) (*ReviewResult, error)
 }
 ```
 
-### 7.7 GitHub
-
-GitHub API 抽象。
+### 3.11 Coder
 
 ```go
-type GitHubClient interface {
-    // Issue
-    GetIssue(url string) (*Issue, error)
-    CreateIssue(project *Project, title, body string) (*Issue, error)
-
-    // PR
-    GetPR(url string) (*PR, error)
-    CreatePR(project *Project, diff *Diff) (*PR, error)
-    GetReviewComments(pr *PR) ([]*ReviewComment, error)
-    PostReviewComment(pr *PR, review *ReviewResult) error
-    PushAndUpdatePR(pr *PR, diff *Diff) error
-}
-```
-
-### 7.8 Coder
-
-编码能力抽象。
-
-```go
+// coder/coder.go
 type Coder interface {
     // 根据 Issue 实现代码
-    Implement(ctx context.Context, issue *Issue) (*Diff, error)
+    Implement(ctx context.Context, project *Project, issue *Issue) error
 
     // 根据 Review 反馈修正代码
-    Revise(ctx context.Context, pr *PR, feedback []*ReviewComment) (*Diff, error)
+    Revise(ctx context.Context, project *Project, pr *PR, comments []*ReviewComment) error
+}
+```
+
+### 3.12 Storage
+
+```go
+// storage/storage.go
+type Storage interface {
+    // Discuss 上下文
+    SaveDiscussContext(ctx *DiscussContext) error
+    GetDiscussContext(projectID string) (*DiscussContext, error)
+
+    // 项目配置
+    SaveProject(project *Project) error
+    GetProject(path string) (*Project, error)
 }
 ```
 
 ---
 
-## 8. Command Reference
+## 4. Data Models
 
-| Command | Description | Handler |
-|---------|-------------|---------|
-| `/on <path>` | 切换项目上下文 | Project |
-| `/discuss <idea>` | 开始需求讨论 | Discuss |
-| `/create-issue` | 创建 Issue | Discuss |
-| `/start-dev <issue>` | 开发指定 issue | Develop |
-| `/review <pr>` | Review 指定 PR | Review |
-| `/revise <pr>` | 修正指定 PR | Revise |
+### 4.1 Issue
+
+```go
+type Issue struct {
+    Number    int
+    Title     string
+    Body      string
+    State     string
+    URL       string
+    Project   *Project
+}
+```
+
+### 4.2 PR
+
+```go
+type PR struct {
+    Number    int
+    Title     string
+    Body      string
+    State     string
+    Head      string  // branch name
+    Base      string  // target branch
+    URL       string
+    Diff      string
+    Project   *Project
+}
+```
+
+### 4.3 ReviewComment
+
+```go
+type ReviewComment struct {
+    ID        int
+    Author    string
+    Body      string
+    Path      string
+    Line      int
+    CreatedAt time.Time
+}
+```
+
+### 4.4 ReviewResult
+
+```go
+type ReviewResult struct {
+    Comments  []*ReviewComment
+    Summary   string
+}
+```
 
 ---
 
-## 9. Error Handling
+## 5. Error Handling
 
-| Error | Description | Recovery |
-|-------|-------------|----------|
-| `project_not_found` | 目录不存在 | Human 确认路径 |
-| `git_remote_not_found` | 无 git remote | Human 确认目录 |
-| `github_auth_failed` | GitHub 认证失败 | 检查 GITHUB_TOKEN |
-| `issue_not_found` | Issue 不存在 | Human 确认 URL |
-| `pr_not_found` | PR 不存在 | Human 确认 URL |
-| `llm_error` | LLM 调用失败 | 自动重试 3 次 |
+| Error | Module | Description | Recovery |
+|-------|--------|-------------|----------|
+| `ErrProjectNotFound` | Project | 目录不存在 | Human 确认路径 |
+| `ErrGitRemoteNotFound` | Project | 无 git remote | Human 确认目录 |
+| `ErrGitHubAuth` | GitHub | GitHub 认证失败 | 检查 GITHUB_TOKEN |
+| `ErrIssueNotFound` | GitHub | Issue 不存在 | Human 确认 URL |
+| `ErrPRNotFound` | GitHub | PR 不存在 | Human 确认 URL |
+| `ErrLLM` | LLM | LLM 调用失败 | 自动重试 3 次 |
+| `ErrCoder` | Coder | 编码失败 | Human 介入 |
 
 ---
 
-## 10. Security
+## 6. Security
 
-- GitHub Token 从环境变量读取，不存储
+### 6.1 Credentials
+
+- GitHub Token 从环境变量读取（`GITHUB_TOKEN`）
+- 不持久化存储 token
 - 不打印 token 到日志
-- Git 操作在项目目录内执行
-- 所有关键操作由 Human 执行，AI 无法直接修改代码
+
+### 6.2 Project Isolation
+
+- 每个项目有独立的工作目录
+- Git 操作限制在项目目录内
+- 禁止跨项目操作
+
+### 6.3 Human-in-the-Loop
+
+- 所有 slash command 由 Human 执行
+- AI 无法绕过 Human 执行关键操作
+- AI 执行结果需要 Human 确认后才能继续
+
+---
+
+## 7. Project Structure
+
+```
+humera/
+├── cmd/
+│   └── humera/
+│       └── main.go
+│
+├── internal/
+│   ├── channel/          # IM 平台接入
+│   │   ├── channel.go
+│   │   ├── telegram.go
+│   │   ├── feishu.go
+│   │   ├── discord.go
+│   │   ├── cli.go
+│   │   └── websocket.go
+│   │
+│   ├── command/          # 命令解析
+│   │   ├── command.go
+│   │   └── parser.go
+│   │
+│   ├── dispatch/          # 命令分发
+│   │   └── dispatch.go
+│   │
+│   ├── handler/           # 任务处理器
+│   │   ├── handler.go     # 接口定义
+│   │   ├── discuss.go
+│   │   ├── develop.go
+│   │   ├── review.go
+│   │   └── revise.go
+│   │
+│   ├── project/           # 项目上下文
+│   │   └── project.go
+│   │
+│   ├── github/            # GitHub API
+│   │   └── github.go
+│   │
+│   ├── provider/          # LLM 接入
+│   │   └── llm.go
+│   │
+│   ├── coder/             # 编码执行
+│   │   └── coder.go
+│   │
+│   └── storage/           # 本地存储
+│       └── storage.go
+│
+├── pkg/
+│   └── display/           # 格式化输出
+│       └── display.go
+│
+└── test/
+    └── integration/        # 集成测试
+```
+
+---
+
+## 8. External Dependencies
+
+### 8.1 GitHub API
+
+- Issue CRUD
+- PR CRUD
+- Review Comments
+- 认证：Personal Access Token
+
+### 8.2 LLM Provider
+
+- Chat API（确认、建议生成）
+- 支持：OpenAI、Anthropic、Ollama、本地模型
+
+### 8.3 Coder
+
+- Claude Code CLI
+- OpenCode CLI
+- 支持自定义 coder 实现
