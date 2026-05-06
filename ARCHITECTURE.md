@@ -187,14 +187,14 @@ type Session struct {
 type IntentType string
 
 const (
-    IntentDiscuss      IntentType = "discuss"      // Discuss requirements
-    IntentCreateIssue  IntentType = "create-issue" // Create GitHub Issue
-    IntentStartDev     IntentType = "start-dev"    // Start development
-    IntentAIReview     IntentType = "ai-review"    // AI Code Review
-    IntentHumanReview  IntentType = "human-review" // Human Code Review
-    IntentRevise       IntentType = "revise"       // Fix issues
-    IntentMerge        IntentType = "merge"        // Merge PR
+    IntentDiscuss       IntentType = "discuss"       // Discuss requirements
+    IntentCreateIssue   IntentType = "create-issue"  // Create GitHub Issue
+    IntentStartDev      IntentType = "start-dev"     // Start development
+    IntentAIReview      IntentType = "ai-review"    // AI Code Review
+    IntentRevise        IntentType = "revise"        // Fix issues
+    IntentMerge         IntentType = "merge"         // Merge PR
     IntentSwitchProject IntentType = "switch-project" // Switch project
+    IntentCancel        IntentType = "cancel"        // Cancel current flow
 )
 
 type Intent struct {
@@ -205,14 +205,11 @@ type Intent struct {
     
     // Parsed parameters
     Params map[string]string
-    
-    // Confidence score
-    Confidence float64
 }
 
 // Intent recognition
 // - Slash commands: explicit (e.g., /create-issue)
-// - Natural language: AI-inferred
+// - Natural language: all treated as discuss
 ```
 
 **Intent Recognition Rules**:
@@ -1052,35 +1049,43 @@ type Infra struct {
 
 ### 5.1 Slash Commands
 
-| Command | Intent | Action | Approver |
-|---------|--------|--------|----------|
-| `/switch <project>` | switch-project | Bind session to another project | - |
-| `/create-issue` | create-issue | Create GitHub Issue from discussion | Human |
-| `/start-dev` | start-dev | Start development (PM → Dev handoff) | Human |
-| `/start` | start-dev | Alias for /start-dev | Human |
-| `/ai-review` | ai-review | Run AI code review | - |
-| `/review` | human-review | Human begins manual review | Human |
-| `/revise` | revise | Fix review issues | Human |
-| `/merge` | merge | Merge PR to main | Human |
-| `/cancel` | cancel | Cancel current flow | Human |
+| Command | Intent | Action | Notes |
+|---------|--------|--------|-------|
+| `/switch <project>` | switch-project | Bind session to another project | |
+| `/create-issue` | create-issue | Create GitHub Issue from discussion | |
+| `/start-dev` 或 `/start` | start-dev | Start development (PM → Dev handoff) | |
+| `/ai-review` | ai-review | Run AI code review | 在 PR 上运行 AI 审查 |
+| `/revise` | revise | Return PR to dev for fixes | |
+| `/merge` | merge | Merge PR to main | |
+| `/cancel` | cancel | Cancel current flow | |
 
-### 5.2 Natural Language Mapping
+**注意**：
+- Human 的 code review 直接在 GitHub PR 页面进行，不需要 slash command
+- `/merge` 是确认 Human 审查通过后执行的合并操作
 
-| Phrase | Intent | Notes |
-|--------|--------|-------|
-| "我想加一个功能..." | discuss | Start requirements discussion |
-| "帮我看看这个 bug" | discuss | Start bug discussion |
-| "确认" | approve | Approve current state |
-| "OK" | approve | Approve current state |
-| "对" | approve | Approve current state |
-| "不对/不是/改成..." | discuss (correction) | Human is correcting |
-| "我来 review" | human-review | Human starts review |
-| "有问题" | revise | Need fixes |
-| "没问题了" | approve | Approval after fixes |
+### 5.2 Intent Recognition
+
+**核心原则**：所有关键节点必须通过明确的 slash command 触发，自然语言只用于讨论需求。
+
+```go
+func (p *Parser) Parse(input string) *Intent {
+    // 1. 检查 slash command（精确匹配）
+    if strings.HasPrefix(input, "/") {
+        return p.parseSlashCommand(input)
+    }
+    
+    // 2. 其他全部视为需求讨论
+    return &Intent{Type: IntentDiscuss, Confidence: 1.0}
+}
+```
+
+**自然语言的唯一作用**：讨论需求（Discuss）。Human 和 AI 之间的所有对话都是需求澄清/确认的过程，直到 Human 决定发起下一个 slash command。
+
+**注意**：`/review` 和 `/merge` 等命令需要 Human 在 GitHub/Web 上亲自操作或确认，而不是通过"可以"、"没问题"这类自然语言。
 
 ### 5.3 Discussion Loop Flow
 
-The core interaction pattern for requirements gathering:
+核心交互模式：Human 和 AI 进行需求讨论，直到 Human 发起明确的 slash command。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -1109,30 +1114,27 @@ The core interaction pattern for requirements gathering:
 │  │  Display.Requirements() → [Result Display Page]                    │    │
 │  │                                                                     │    │
 │  │  ┌───────────────────────────────────────────────────────────────┐  │    │
-│  │  │ 功能：给所有 API 添加 rate limiting                          │  │    │
-│  │  │ 限制：100 req/min per user                                   │  │    │
-│  │  │ 实现：Redis + sliding window                                 │  │    │
-│  │  │                                                               │  │    │
-│  │  │ [确认 ✓]  [修改 ✎]                                           │  │    │
+│  │  │  功能：给所有 API 添加 rate limiting                          │  │    │
+│  │  │  限制：100 req/min per user                                   │  │    │
+│  │  │  实现：Redis + sliding window                                 │  │    │
 │  │  └───────────────────────────────────────────────────────────────┘  │    │
+│  │                                                                     │    │
+│  │  Human 确认理解正确后，发起下一个命令                                 │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │                                    │                                          │
 │                     ┌──────────────┴──────────────┐                         │
 │                     │                               │                         │
-│                Human: "确认"                  Human: "限制改成 200"            │
+│          Human: "限制改成 200"          Human: /create-issue                 │
 │                     │                               │                         │
 │                     ▼                               ▼                         │
-│          Intent: IntentApprove          Intent: IntentDiscuss                 │
-│          (correction=false)             (correction=true)                    │
+│          Intent: IntentDiscuss            Intent: IntentCreateIssue           │
+│          (correction=true)                                                  │
 │                     │                               │                         │
 │                     ▼                               ▼                         │
-│          ┌─────────────────┐          ┌─────────────────────────────────┐    │
-│          │ CreateVersion() │          │ Update RequirementsUnderstanding │    │
-│          │ Confirm()       │          │ + Display.Requirements(updated)   │    │
-│          │                 │          │                                 │    │
-│          │ Flow → issue-   │          │ → Back to Display (loop)        │    │
-│          │ created         │          │                                 │    │
-│          └─────────────────┘          └─────────────────────────────────┘    │
+│          ┌─────────────────────┐          ┌─────────────────────────┐    │
+│          │ Update + Re-display │          │ Create GitHub Issue      │    │
+│          └─────────────────────┘          │ Flow → issue-created     │    │
+│                                             └─────────────────────────┘    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1144,18 +1146,14 @@ The core interaction pattern for requirements gathering:
 1. Human: "我要给 API 加 rate limiting"
    → Intent: discuss
    → PM Agent analyzes requirements
-   → Display: AI presents understanding (v1)
-   
-2. Human: "对，但是限制改成 200 req/min"
-   → Intent: discuss (correction)
+   → Display: AI presents understanding
+
+2. Human: "限制改成 200 req/min"
+   → Intent: discuss
    → PM Agent updates understanding
-   → Display: AI shows updated understanding (v2)
-   
-3. Human: "确认"
-   → Intent: approve
-   → Discussion confirmed (v2)
-   
-4. Human: "/create-issue"
+   → Display: AI shows updated understanding
+
+3. Human: /create-issue
    → Intent: create-issue
    → PM Agent creates GitHub Issue
    → Flow: discussing → issue-created
@@ -1163,28 +1161,23 @@ The core interaction pattern for requirements gathering:
 
 **Development Flow**:
 ```
-1. Human: "/start-dev"
+1. Human: /start-dev
    → Intent: start-dev
    → Flow: issue-created → in-dev
    → Dev Agent starts implementation
    → Dev Agent creates PR
    → Flow: in-dev → pr-open → reviewing
-   
-2. (AI runs automated review)
-   → Reviewer Agent outputs review results
-   → Display shows review to Human
-   
-3. Human: "/review"
-   → Intent: human-review
-   → Human reviews code
-   
-4. Human: "有几个问题，需要修改"
+   → Display: PR opened for Human review
+
+2. Human: (在 GitHub 上进行 code review)
+
+3. Human: /revise
    → Intent: revise
    → Flow: reviewing → in-dev
    → Dev Agent fixes issues
-   → Flow: in-dev → reviewing (again)
-   
-5. Human: "/merge"
+   → Flow: in-dev → reviewing
+
+4. Human: /merge
    → Intent: merge
    → Flow: reviewing → merged
 ```
@@ -1202,43 +1195,40 @@ The core interaction pattern for requirements gathering:
                     │     │ discussing │ ←── Human starts requirements        │
                     │     └─────┬─────┘                                       │
                     │           │                                              │
-                    │           │ Human: "/create-issue"                       │
-                    │           │ Human: "confirm"                            │
+                    │           │ Human: /create-issue                         │
                     │           ▼                                              │
                     │     ┌───────────────┐                                    │
-                    │     │ issue-created │ ←── GitHub Issue created           │
+                    │     │ issue-created │ ←── GitHub Issue created          │
                     │     └───────┬───────┘                                    │
                     │             │                                             │
-                    │             │ Human: "/start-dev"                        │
-                    │             │ Human: "confirm"                            │
-                    │             ▼                                             │
+                    │             │ Human: /start-dev                          │
+                    │             ▼                                              │
                     │     ┌─────────────┐                                      │
-                    │     │  in-dev     │ ←── Dev Agent working                 │
+                    │     │  in-dev     │ ←── Dev Agent working                │
                     │     └──────┬──────┘                                      │
                     │            │                                              │
                     │            │ Dev Agent: PR created                        │
                     │            ▼                                              │
                     │     ┌─────────────┐                                      │
-                    │     │  pr-open   │ ←── PR submitted                       │
+                    │     │  pr-open   │ ←── PR submitted                      │
                     │     └──────┬──────┘                                      │
                     │            │                                              │
-                    │            │ AI Reviewer: review complete                 │
+                    │            │ AI Review complete (auto or /ai-review)     │
                     │            ▼                                              │
                     │     ┌─────────────┐                                      │
     Human:          │     │ reviewing   │                                      │
-    "/revise" ───────┼──→  └──────┬──────┘                                      │
+    /revise ────────┼──→  └──────┬──────┘                                      │
                         │            │                                             │
-                        │            │ Human: "/merge"                           │
-                        │            │ Human: "LGTM"                              │
+                        │            │ Human: /merge                              │
                         │            ▼                                             │
                         │     ┌─────────────┐                                      │
                         │     │  merged    │ ←── Code merged to main             │
                         │     └─────────────┘                                      │
                         │            │                                             │
-                        │            │ Auto: deployed                            │
+                        │            │ Auto: deployed                             │
                         │            ▼                                             │
                         │     ┌─────────────┐                                      │
-                        │     │  closed    │ ←── Issue closed                     │
+                        │     │  closed    │ ←── Issue closed                    │
                         │     └─────────────┘                                      │
                         │                                                           │
                         └─────────────────────────────────────────────────────────┘
@@ -1259,6 +1249,10 @@ The core interaction pattern for requirements gathering:
 | reviewing | /merge | merged | human | Merge PR |
 | reviewing | /cancel | - | human | Close PR |
 | merged | (deployed) | closed | ai | Auto-transition |
+
+**触发类型说明**：
+- `human`：必须通过 slash command 触发
+- `ai`：系统在满足条件时自动执行
 
 ---
 
