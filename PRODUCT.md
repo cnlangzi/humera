@@ -20,7 +20,18 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 | `/review <pr>` | 审查 | Review PR 代码，写入 GitHub Comment | — |
 | `/revise <pr>` | 修正 | 读取 Review 反馈，修改代码，push | Updated PR |
 
-### 2.1 路径格式
+### 2.1 前置条件
+
+| Command | 前置条件 |
+|---------|---------|
+| `/on` | 无 |
+| Discuss（普通消息） | 如果没有 project context，AI 要求 Human 先执行 `/on` |
+| `/new` | 必须先执行 `/on`（依赖项目上下文中的 repo 信息） |
+| `/fix` | 必须先执行 `/on` |
+| `/review` | 必须先执行 `/on` |
+| `/revise` | 必须先执行 `/on` |
+
+### 2.2 路径格式
 
 `/on <path>` 中的 path 支持以下格式：
 
@@ -32,7 +43,7 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 | `./` 或 `../` 开头 | `./code/myapp` | 相对当前工作目录 |
 | 非以上格式 | `code/myapp` | 默认视为 `~/code/myapp` |
 
-### 2.2 项目上下文
+### 2.3 项目上下文
 
 执行 `/on <path>` 时：
 
@@ -41,7 +52,7 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 3. **读取 git remote**：从 `.git/config` 读取 origin remote，解析出 `owner/repo`
 4. **设置上下文**：保存 `workdir` 和 `repo` 信息
 
-### 2.3 参数格式
+### 2.4 参数格式
 
 | Command | 参数格式 | 示例 |
 |---------|---------|------|
@@ -98,7 +109,23 @@ Human: 确认（回复"确认"或类似明确答复）
 等待 Human 执行 /new
 ```
 
-### 3.3 内部文档
+### 3.3 无项目上下文时的行为
+
+如果在 Discuss 模式下，Human 发送普通消息但没有设置项目上下文：
+
+```
+Human: [任意消息，但没有先执行 /on]
+       │
+       ▼
+AI: 请先执行 /on <path> 设置项目上下文
+       │
+       ▼
+等待 Human 执行 /on
+```
+
+设置项目上下文后，继续 Discuss 模式。
+
+### 3.4 内部文档
 
 讨论过程中，AI 在项目目录下维护一个文档文件（`.humera/discuss.md`）：
 
@@ -152,7 +179,7 @@ Human: 确认（回复"确认"或类似明确答复）
 - 当前方案是最新、最完整的版本
 - Human 确认"确认"时，确认的是当前方案
 
-### 3.4 角色
+### 3.5 角色
 
 | | Human | AI |
 |---|-------|-----|
@@ -172,7 +199,13 @@ Human: 确认（回复"确认"或类似明确答复）
 | **Input** | `.humera/discuss.md` 中已确认的"当前方案" |
 | **Output** | GitHub Issue |
 
-### 4.2 角色
+### 4.2 前置条件
+
+- 必须先执行 `/on <path>` 设置项目上下文
+- `.humera/discuss.md` 必须存在且已标记为"已确认"
+- `repo` 信息从项目上下文中获取
+
+### 4.3 角色
 
 | | Human | AI |
 |---|-------|-----|
@@ -191,7 +224,13 @@ Human: 确认（回复"确认"或类似明确答复）
 | **Input** | GitHub Issue URL |
 | **Output** | GitHub PR |
 
-### 5.2 角色
+### 5.2 前置条件
+
+- 必须先执行 `/on <path>` 设置项目上下文
+- `repo` 信息从项目上下文中获取
+- Issue 必须在该 repo 中存在
+
+### 5.3 角色
 
 | | Human | AI |
 |---|-------|-----|
@@ -213,7 +252,13 @@ Human: 确认（回复"确认"或类似明确答复）
 | **Input** | GitHub PR URL |
 | **Output** | 写入 GitHub PR Comment |
 
-### 6.2 角色
+### 6.2 前置条件
+
+- 必须先执行 `/on <path>` 设置项目上下文
+- `repo` 信息从项目上下文中获取
+- PR 必须在该 repo 中存在
+
+### 6.3 角色
 
 | | Human | AI |
 |---|-------|-----|
@@ -222,7 +267,7 @@ Human: 确认（回复"确认"或类似明确答复）
 | 代码审查 | | 专业方式 review |
 | 写入 Comment | | 写入 GitHub PR Comment |
 
-### 6.3 Review 维度
+### 6.4 Review 维度
 
 | 维度 | 说明 |
 |------|------|
@@ -243,7 +288,13 @@ Human: 确认（回复"确认"或类似明确答复）
 | **Input** | GitHub PR URL |
 | **Output** | 更新的 GitHub PR |
 
-### 7.2 角色
+### 7.2 前置条件
+
+- 必须先执行 `/on <path>` 设置项目上下文
+- `repo` 信息从项目上下文中获取
+- PR 必须有 Review Comments
+
+### 7.3 角色
 
 | | Human | AI |
 |---|-------|-----|
@@ -253,7 +304,7 @@ Human: 确认（回复"确认"或类似明确答复）
 | 修改代码 | | 修改代码 |
 | push 代码 | | push 代码到远端 |
 
-### 7.3 迭代说明
+### 7.4 迭代说明
 
 Review 和 Revise 可以重复迭代：
 - Review 后可以 Revise
