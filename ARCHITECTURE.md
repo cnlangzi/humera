@@ -15,6 +15,7 @@ Humera 是一个 **Human 掌控的 AI Agent**，核心原则：
 |------|------|------------|
 | **Channel** | 消息收发（IM 平台接入） | Telegram/Feishu/CLI/WebSocket |
 | **Command Parser** | 解析 slash command | `/on`, `/new`, `/tdd`, `/fix`, `/review`, `/revise` |
+| **Agent Loop** | 核心控制流：LLM → 工具 → LLM | 循环调用 LLM，执行 tool_calls |
 | **Dispatcher** | 命令分发到 Handler | 根据 CommandType 路由 |
 | **LLM Provider** | AI 推理能力 | OpenAI/Anthropic 等 |
 | **Tool System** | 执行具体操作 | GitHub API, Coding Agent, File System |
@@ -67,6 +68,18 @@ Humera 是一个 **Human 掌控的 AI Agent**，核心原则：
 │                                    │                                    │
 │                                    ▼                                    │
 │   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                      Agent Loop                                  │   │
+│   │                                                                  │   │
+│   │   while (tool_calls exist):                                     │   │
+│   │       1. LLM.Chat() → response + tool_calls                     │   │
+│   │       2. Execute each tool_call                                 │   │
+│   │       3. Append results to messages                             │   │
+│   │       4. Continue                                               │   │
+│   │                                                                  │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                    │                                    │
+│                                    ▼                                    │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
 │   │                        LLM Provider                              │   │
 │   │                                                                  │   │
 │   │   Responsibility:                                               │   │
@@ -93,7 +106,7 @@ Humera 是一个 **Human 掌控的 AI Agent**，核心原则：
 │                                    │                                    │
 │                                    ▼                                    │
 │   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │                     Task Handlers                               │   │
+│   │                     Task Handlers                                │   │
 │   │                                                                  │   │
 │   │   ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌────────┐│   │
 │   │   │ Discuss │  │   TDD   │  │   Fix   │  │ Review  │  │ Revise ││   │
@@ -117,6 +130,90 @@ Humera 是一个 **Human 掌控的 AI Agent**，核心原则：
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+### 1.3 Agent Loop
+
+Agent Loop 是 Agent 的核心控制流：
+
+```go
+// agent/loop.go
+
+type AgentLoop struct {
+    llm        LLMProvider
+    tools      []Tool
+    maxIter    int
+}
+
+func (a *AgentLoop) Run(ctx context.Context, messages []Message) (string, error) {
+    iter := 0
+    for iter < a.maxIter {
+        // 1. LLM 生成回复 + tool_calls
+        resp, err := a.llm.Chat(ctx, messages)
+        if err != nil {
+            return "", err
+        }
+
+        // 2. 如果没有 tool_calls，返回文本回复
+        if len(resp.ToolCalls) == 0 {
+            return resp.Content, nil
+        }
+
+        // 3. 执行 tool_calls
+        for _, tc := range resp.ToolCalls {
+            result, err := a.executeTool(tc)
+            if err != nil {
+                // 工具执行失败，返回错误信息
+                messages = append(messages, Message{
+                    Role:    "tool",
+                    Content: fmt.Sprintf("Error: %v", err),
+                })
+            } else {
+                messages = append(messages, Message{
+                    Role:    "tool",
+                    Content: result,
+                })
+            }
+        }
+
+        iter++
+    }
+
+    return "", ErrMaxIterations
+}
+
+func (a *AgentLoop) executeTool(tc ToolCall) (string, error) {
+    for _, tool := range a.tools {
+        if tool.Name() == tc.Name {
+            return tool.Execute(tc.Args)
+        }
+    }
+    return "", fmt.Errorf("unknown tool: %s", tc.Name)
+}
+```
+
+**Tool 接口：**
+
+```go
+// agent/tool.go
+
+type ToolCall struct {
+    Name string
+    Args map[string]any
+}
+
+type Tool interface {
+    Name() string
+    Description() string
+    Execute(args map[string]any) (string, error)
+}
+
+// 注册到 AgentLoop 的工具：
+// - GitHubIssueTool     (GetIssue, CreateIssue)
+// - GitHubPRTool        (CreatePR, UpdatePR, GetPR)
+// - GitHubCommentTool   (PostComment, GetComments)
+// - CodingTool          (TDD, Implement, Revise)
+// - FileSystemTool      (Read, Write, expandPath)
+```
+
 ---
 
 ## 2. Module Boundaries
@@ -127,7 +224,9 @@ Humera 是一个 **Human 掌控的 AI Agent**，核心原则：
 |--------|-------|---------------|------------|
 | **Channel** | Input/Output | IM 平台接入 | `Receive()`, `Send()` |
 | **Command** | Core | 解析 slash command | `Parse(Message) *Command` |
-| **Dispatcher** | Core | 命令分发 | `Dispatch(Command, *Project) *Result` |
+| **Agent Loop** | Core | 核心控制流：LLM → 工具 → LLM | `Run(ctx, messages)` |
+| **Tool System** | Core | 工具注册和执行 | `Tool`, `Register()` |
+| **Dispatcher** | Core | 命令分发 | `Dispatch(Command, *Session) *Result` |
 | **Session** | Core | 会话上下文管理 | `AddMessage()`, `GetHistory()`, `GetProject()` |
 | **LLM** | Core | AI 推理 | `Chat()`, `Review()` |
 | **DiscussHandler** | Handler | 需求讨论 | `Handle(ctx, msg, session) *Result` |
@@ -143,16 +242,21 @@ Humera 是一个 **Human 掌控的 AI Agent**，核心原则：
 
 ```
 Channel → Command → Dispatcher → [Handler Layer]
-                                   │
-                                   ├── Session (上下文)
-                                   ├── LLM (推理能力)
-                                   └── Tool Layer (GitHub, Coder, PathResolver)
+                              ↓
+                         Agent Loop ← Tools
+                              ↓
+                         LLM Provider
 ```
 
 **依赖方向规则：**
 - 上层可以依赖下层
 - 下层不能依赖上层
 - 同层之间不允许循环依赖
+
+**Tool 注册到 Agent Loop：**
+- Handler 不直接调用 Tool
+- Handler 通过 Agent Loop 调用 Tool（通过 messages）
+- Tool 执行结果通过 tool result message 返回
 
 ### 2.3 数据流
 
@@ -179,9 +283,13 @@ Dispatcher.Dispatch(cmd, session)
     ▼
 Handler.Handle()
     │
-    ├── LLM.Chat()        (讨论、推理)
-    ├── GitHub.*()       (Issue/PR 操作)
-    └── Coder.*()        (编码执行)
+    ▼
+Agent Loop.Run(ctx, messages)
+    │
+    ├── LLM.Chat() → response + tool_calls
+    ├── Execute tool_calls
+    ├── Append results to messages
+    └── Loop until no tool_calls
     │
     ▼
 Result.Display
@@ -899,6 +1007,16 @@ humera/
 │   ├── discord.go
 │   ├── cli.go
 │   └── ws.go                     # WebSocket
+│
+├── agent/                         # Agent 核心
+│   ├── loop.go                   # AgentLoop: LLM → 工具 → LLM
+│   ├── tool.go                   # Tool interface
+│   └── tools/                    # Tool 实现
+│       ├── github_issue.go
+│       ├── github_pr.go
+│       ├── github_comment.go
+│       ├── coding.go
+│       └── filesystem.go
 │
 ├── command/                       # 命令解析
 │   └── parser.go                 # slash command parser
