@@ -4,39 +4,38 @@ Human 掌控的 AI 协作工具。
 
 ## Core Concept
 
-Human 发起所有任务，执行所有 slash command。AI 负责协助确认和建议。
+Human 发起每个任务，AI 执行任务全部过程。
 
 ```
-Human 执行 /on <path> → 设置项目 + 进入讨论模式
-Human 与 AI 迭代讨论需求
-Human 执行 /create-issue → 创建 GitHub Issue
-Human 执行 /fix <issue> → AI 编码、push、PR
-Human 执行 /review <pr> → AI review 代码
-Human 执行 /revise <pr> → AI 修正代码
+/on ~/code/myapp     → 切换项目 + 进入讨论模式
+/new                 → 创建 GitHub Issue
+/fix <issue>         → 编码 + push + PR
+/review <pr>         → Review 代码 → PR Comment
+/revise <pr>         → 读取反馈 + 修改 + push
 ```
 
-## 5 Commands
+## 4 Tasks
 
-| Command | Description | Output |
-|---------|-------------|--------|
-| `/on <path>` | 切换项目 + 进入讨论 | 项目上下文 |
-| `/create-issue` | 创建 Issue | GitHub Issue |
-| `/fix <issue>` | 开发 Issue | GitHub PR |
-| `/review <pr>` | Review PR | PR Comment |
-| `/revise <pr>` | 修正 PR | Updated PR |
+| Task | Command | AI 执行 |
+|------|---------|---------|
+| **Discuss** | `/on <path>` | 确认需求细节，输出确认文档 |
+| **Create Issue** | `/new` | 创建 GitHub Issue |
+| **Develop** | `/fix <issue>` | 编码、push、PR |
+| **Review** | `/review <pr>` | Review，写入 PR Comment |
+| **Revise** | `/revise <pr>` | 修改代码，push |
 
 ## Quick Start
 
 ```bash
-# 切换项目，自动进入讨论模式
+# 切换项目，进入讨论模式
 /on ~/code/myapp
 
-# Human 与 AI 讨论需求...
-# AI 不断确认细节，Human 不断补充
-# 直到双方确认
+# Human 与 AI 讨论需求
+AI 确认细节，Human 补充
+直到双方确认
 
 # 创建 Issue
-/create-issue
+/new
 
 # 开始开发
 /fix https://github.com/owner/repo/issues/123
@@ -56,21 +55,6 @@ Human 执行 /revise <pr> → AI 修正代码
 - WhatsApp
 - CLI
 - WebSocket
-
-## Architecture
-
-```
-humera/
-├── channel/      # IM 平台
-├── command/      # slash command 解析
-├── dispatch/     # 命令分发
-├── handler/      # 任务处理器（Discuss/Develop/Review/Revise）
-├── project/      # 项目上下文
-├── github/       # GitHub API
-├── provider/     # LLM
-├── coder/        # 编码执行
-└── storage/      # 本地存储
-```
 
 ## License
 

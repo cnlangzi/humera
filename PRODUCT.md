@@ -4,58 +4,37 @@
 
 Humera 是一个** Human 掌控的 AI 协作工具**。
 
-Human 是唯一的掌控者和执行者。AI 是协作助手，负责确认、建议、执行过程，但不执行最终产物。
+核心原则：
+- **Human 发起**：每个任务由 Human 显式发起（执行 slash command）
+- **AI 执行**：Human 发起后，AI 执行任务的全部过程
+- **Human 确认**：对于需要确认的任务，Human 确认结果后继续
 
 ---
 
-## 2. Human 与 AI 的关系
+## 2. Command Summary
 
-### 2.1 角色定义
-
-| 角色 | 职责 |
-|------|------|
-| **Human** | 掌控者：发起任务、确认结果、执行所有 slash command |
-| **AI** | 协作助手：确认细节、提供建议、执行过程、输出结果 |
-
-### 2.2 边界
-
-| AI 能做的 | AI 不能做的 |
-|-----------|-------------|
-| 确认需求细节 | 创建 Issue |
-| 提供建议 | 提交代码 |
-| 执行过程（编码、review） | 合并 PR |
-| 输出结果到 GitHub | 执行 slash command |
+| Command | Task | 说明 | Output |
+|---------|------|------|--------|
+| `/on <path>` | 切换项目 | 设置项目上下文，进入讨论模式 | 项目上下文 |
+| `/new` | 创建 Issue | 把讨论结果创建为 GitHub Issue | GitHub Issue |
+| `/fix <issue>` | 开发 | 读取 Issue，编码，push，创建 PR | GitHub PR |
+| `/review <pr>` | 审查 | Review PR 代码，写入 GitHub Comment | PR Comment |
+| `/revise <pr>` | 修正 | 读取 Review 反馈，修改代码，push | Updated PR |
 
 ---
 
-## 3. 任务类型
+## 3. Task: Discuss（需求讨论）
 
-Humera 定义了 4 种任务类型：
+**起点：所有新功能和 Bug 都从这里开始**
 
-| Task | 发起 | 执行者 | 产物 |
-|------|------|--------|------|
-| **Discuss** | Human 执行 `/on` | AI + Human 迭代 | 确认文档（暂存） |
-| **Create Issue** | Human | AI | GitHub Issue |
-| **Develop** | Human | AI | GitHub PR |
-| **Review** | Human | AI | PR Comment |
-| **Revise** | Human | AI | Updated PR |
-
----
-
-## 4. Task: Discuss（需求讨论）
-
-### 4.1 描述
-
-Human 执行 `/on <path>` 切换项目后，自动进入讨论模式。Human 提出需求或问题，AI 不断确认细节，Human 不断补充，直到双方确认无误。
-
-### 4.2 Input / Output
+### 3.1 Input / Output
 
 | | 内容 |
 |---|------|
-| **Input** | Human 的任何消息（可以是新功能或 Bug） |
-| **Output** | 确认文档（暂存），等待后续 `/create-issue` |
+| **Input** | Human 的消息（新功能需求或 Bug 描述） |
+| **Output** | 确认文档（暂存），等待 `/new` |
 
-### 4.3 流程
+### 3.2 流程
 
 ```
 Human: /on ~/code/myapp
@@ -86,10 +65,10 @@ AI: 整合输出最终确认文档
 Human: 确认最终文档
        │
        ▼
-Discuss 结束，等待 Human 执行 /create-issue
+等待 Human 执行 /new
 ```
 
-### 4.4 产物格式
+### 3.3 产物格式
 
 ```
 ═══════════════════════════════════════
@@ -113,72 +92,34 @@ Discuss 结束，等待 Human 执行 /create-issue
 - [ ] [标准 2]
 
 ═══════════════════════════════════════
-确认后执行 /create-issue 创建 Issue
+确认后执行 /new 创建 Issue
 ═══════════════════════════════════════
 ```
 
-### 4.5 边界
+### 3.4 边界
 
-| 边界 | 说明 |
-|------|------|
-| **起点** | Human 执行 `/on <path>` |
-| **结束条件** | Human 确认最终文档 |
-| **后续动作** | Human 执行 `/create-issue` |
-
----
-
-## 5. Task: Create Issue（创建 Issue）
-
-### 5.1 描述
-
-Human 执行 `/create-issue`，AI 把当前讨论的结果创建为 GitHub Issue。
-
-### 5.2 Input / Output
-
-| | 内容 |
-|---|------|
-| **Input** | Discuss 阶段确认的需求文档 |
-| **Output** | GitHub Issue（包含标题、描述） |
-
-### 5.3 流程
-
-```
-Human: /create-issue
-       │
-       ▼
-AI: 读取当前讨论的确认文档
-       │
-       ▼
-AI: 创建 GitHub Issue
-       │
-       ▼
-AI: 输出 Issue URL
-```
-
-### 5.4 边界
-
-| 边界 | 说明 |
-|------|------|
-| **前置条件** | 必须有 Discuss 阶段的确认文档 |
-| **执行前提** | Human 主动执行 `/create-issue` |
-| **后续动作** | Human 可以执行 `/fix` 开发此 Issue |
+| | Human | AI |
+|---|-------|-----|
+| **发起** | 执行 `/on <path>` | |
+| **需求提出** | 提出原始需求 | |
+| **需求确认** | | 确认细节，输出确认文档 |
+| **需求补充** | 补充 / 修改 | |
+| **理解确认** | | 确认理解是否正确 |
+| **最终确认** | 确认最终文档 | |
+| **创建 Issue** | 执行 `/new` | 创建 GitHub Issue |
 
 ---
 
-## 6. Task: Develop（编码开发）
+## 4. Task: Develop（编码开发）
 
-### 6.1 描述
-
-Human 指定要开发的 Issue，AI 读取 Issue 内容，编码实现，push 代码，创建 PR。
-
-### 6.2 Input / Output
+### 4.1 Input / Output
 
 | | 内容 |
 |---|------|
 | **Input** | GitHub Issue URL |
 | **Output** | GitHub PR（代码已 push） |
 
-### 6.3 流程
+### 4.2 流程
 
 ```
 Human: /fix <issue-url>
@@ -202,31 +143,35 @@ AI: 创建 GitHub PR
 AI: 输出 PR URL
 ```
 
-### 6.4 边界
+### 4.3 边界
 
-| 边界 | 说明 |
-|------|------|
-| **前置条件** | Issue 已存在 |
-| **Human 动作** | 只执行 `/fix <issue-url>`，之后 AI 自主完成 |
-| **无中间确认** | Develop 开始后不等待 Human 确认 |
-| **后续动作** | Human 在 GitHub 上 review PR，决定是否需要 `/revise` |
+| | Human | AI |
+|---|-------|-----|
+| **发起** | 执行 `/fix <issue-url>` | |
+| **读取 Issue** | | 读取 GitHub Issue 详情 |
+| **分析需求** | | 分析需求 |
+| **编码** | | 编码实现 |
+| **push 代码** | | push 代码到分支 |
+| **创建 PR** | | 创建 GitHub PR |
+
+### 4.4 说明
+
+- Human 只需执行 `/fix`，之后 AI 自主完成全部过程
+- 无中间确认环节
+- 后续由 Human 在 GitHub 上 review PR
 
 ---
 
-## 7. Task: Review（代码审查）
+## 5. Task: Review（代码审查）
 
-### 7.1 描述
-
-Human 指定要 review 的 PR，AI 读取代码，用专业方式审查，把意见写入 GitHub PR Comment。
-
-### 7.2 Input / Output
+### 5.1 Input / Output
 
 | | 内容 |
 |---|------|
 | **Input** | GitHub PR URL |
 | **Output** | GitHub PR Comment（review 意见） |
 
-### 7.3 流程
+### 5.2 流程
 
 ```
 Human: /review <pr-url>
@@ -235,7 +180,7 @@ Human: /review <pr-url>
 AI: 读取 PR 代码
        │
        ▼
-AI: 专业方式 review（正确性、安全性、性能、风格、测试覆盖）
+AI: 专业方式 review
        │
        ▼
 AI: 把 review 意见写入 GitHub PR Comment
@@ -244,7 +189,7 @@ AI: 把 review 意见写入 GitHub PR Comment
 AI: 输出 review 摘要
 ```
 
-### 7.4 Review 维度
+### 5.3 Review 维度
 
 | 维度 | 说明 |
 |------|------|
@@ -254,31 +199,33 @@ AI: 输出 review 摘要
 | **代码风格** | 是否符合规范 |
 | **测试覆盖** | 是否有必要的测试 |
 
-### 7.5 边界
+### 5.4 边界
 
-| 边界 | 说明 |
-|------|------|
-| **前置条件** | PR 已存在 |
-| **Human 动作** | 只执行 `/review <pr-url>`，之后 AI 自动完成 |
-| **输出位置** | Review 意见写入 GitHub PR，不在 IM 频道 |
-| **后续动作** | Human 根据 review 决定是否 `/revise` |
+| | Human | AI |
+|---|-------|-----|
+| **发起** | 执行 `/review <pr-url>` | |
+| **读取代码** | | 读取 PR 代码 |
+| **代码审查** | | 专业方式 review |
+| **写入 Comment** | | 写入 GitHub PR Comment |
+
+### 5.5 说明
+
+- Human 只需执行 `/review`，之后 AI 自动完成
+- Review 意见直接写入 GitHub PR，不在 IM 频道
+- 后续由 Human 根据 review 决定是否 `/revise`
 
 ---
 
-## 8. Task: Revise（修正）
+## 6. Task: Revise（修正）
 
-### 8.1 描述
-
-Human 指定要修正的 PR，AI 读取 PR 的 Review Comments，分析反馈，修改代码，push 到远端。
-
-### 8.2 Input / Output
+### 6.1 Input / Output
 
 | | 内容 |
 |---|------|
 | **Input** | GitHub PR URL |
 | **Output** | 更新的 GitHub PR（代码已 push） |
 
-### 8.3 流程
+### 6.2 流程
 
 ```
 Human: /revise <pr-url>
@@ -299,18 +246,24 @@ AI: push 代码到远端
 AI: 输出修正摘要
 ```
 
-### 8.4 边界
+### 6.3 边界
 
-| 边界 | 说明 |
-|------|------|
-| **前置条件** | PR 已有 Review Comments |
-| **Human 动作** | 只执行 `/revise <pr-url>`，之后 AI 自动完成 |
-| **读取范围** | 读取此 PR 的所有 Review Comments |
-| **结束条件** | 代码 push 到远端 |
+| | Human | AI |
+|---|-------|-----|
+| **发起** | 执行 `/revise <pr-url>` | |
+| **读取反馈** | | 读取 PR 的 Review Comments |
+| **分析反馈** | | 分析所有 review 反馈 |
+| **修改代码** | | 修改代码 |
+| **push 代码** | | push 代码到远端 |
+
+### 6.4 说明
+
+- Human 只需执行 `/revise`，之后 AI 自动完成
+- 读取此 PR 的所有 Review Comments 作为修改依据
 
 ---
 
-## 9. 任务关系图
+## 7. 任务关系图
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -320,7 +273,7 @@ AI: 输出修正摘要
 │      │ Human 与 AI 迭代讨论                                     │
 │      │                                                         │
 │      ▼                                                         │
-│   /create-issue ────────────────→ GitHub Issue                  │
+│   /new ─────────────────────────→ GitHub Issue                  │
 │      │                                                         │
 │      │ Human 执行                                               │
 │      ▼                                                         │
@@ -337,15 +290,3 @@ AI: 输出修正摘要
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## 10. Command Summary
-
-| Command | Task | Input | Output |
-|---------|------|-------|--------|
-| `/on <path>` | 切换项目 + Discuss | 目录路径 | 项目上下文 + 讨论模式 |
-| `/create-issue` | 创建 Issue | 确认文档 | GitHub Issue |
-| `/fix <issue>` | 编码 | Issue URL | GitHub PR |
-| `/review <pr>` | 审查 | PR URL | PR Comment |
-| `/revise <pr>` | 修正 | PR URL | Updated PR |

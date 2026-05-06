@@ -10,7 +10,7 @@
 │                                                                          │
 │   /on ~/code/myapp                                                     │
 │   [any message]  ← Discuss 模式                                         │
-│   /create-issue                                                         │
+│   /new                                                         │
 │   /fix <issue>                                                           │
 │   /review <pr>                                                          │
 │   /revise <pr>                                                          │
@@ -46,7 +46,7 @@
 │                                                                          │
 │   Command Types:                                                         │
 │   - CmdOn          → Project                                             │
-│   - CmdCreateIssue → Discuss                                             │
+│   - CmdNew         → Discuss                                             │
 │   - CmdFix         → Develop                                             │
 │   - CmdReview      → Review                                              │
 │   - CmdRevise      → Revise                                              │
@@ -195,7 +195,7 @@ type CommandType string
 
 const (
     CmdOn          CommandType = "on"           // 切换项目
-    CmdCreateIssue CommandType = "create-issue" // 创建 Issue
+    CmdNew         CommandType = "new"            // 创建 Issue
     CmdFix         CommandType = "fix"          // 编码开发
     CmdReview      CommandType = "review"       // 代码审查
     CmdRevise      CommandType = "revise"       // 修正
@@ -287,7 +287,7 @@ type ConfirmDocument struct {
 
 // Handle 实现 TaskHandler 接口
 // 注意：Discuss Handler 处理两类输入：
-// 1. CmdCreateIssue → 创建 Issue
+// 1. CmdNew         → 创建 Issue
 // 2. 普通消息（cmd == nil）→ 讨论迭代
 func (h *DiscussHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
 
