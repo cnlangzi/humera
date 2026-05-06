@@ -2,7 +2,27 @@
 
 ## 1. Architecture Overview
 
-### 1.1 System Flow
+Humera 是一个 **Human 掌控的 AI Agent**，核心原则：
+- Human 发起所有任务（通过 slash command）
+- AI 执行具体工作
+- 所有关键决策由 Human 做出
+
+### 1.1 AI Agent 核心组件
+
+一个完整的 AI Agent 必须包含以下组件：
+
+| 组件 | 职责 | Humera 实现 |
+|------|------|------------|
+| **Channel** | 消息收发（IM 平台接入） | Telegram/Feishu/CLI/WebSocket |
+| **Command Parser** | 解析 slash command | `/on`, `/new`, `/tdd`, `/fix`, `/review`, `/revise` |
+| **Dispatcher** | 命令分发到 Handler | 根据 CommandType 路由 |
+| **LLM Provider** | AI 推理能力 | OpenAI/Anthropic 等 |
+| **Tool System** | 执行具体操作 | GitHub API, Coding Agent, File System |
+| **Session Memory** | 当前对话上下文 | 讨论内容、讨论进度 |
+| **Project Context** | 项目信息 | workdir, repo, branch |
+| **Task Handlers** | 业务逻辑处理 | Discuss, TDD, Fix, Review, Revise |
+
+### 1.2 System Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -10,16 +30,17 @@
 │                                                                          │
 │   /on ~/code/myapp                                                     │
 │   [any message]  ← Discuss 模式                                         │
-│   /new                                                         │
-│   /fix <issue>                                                           │
-│   /review <pr>                                                          │
-│   /revise <pr>                                                          │
+│   /new                                                            │
+│   /tdd 123                                                         │
+│   /fix 123                                                         │
+│   /review 456                                                       │
+│   /revise 456                                                       │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     │ Message
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                              Channel                                     │
+│                              Channel Layer                               │
 │                                                                          │
 │   Responsibility:                                                        │
 │   - 连接 IM 平台（Telegram/Feishu/Discord/WhatsApp/CLI/WebSocket）       │
@@ -34,85 +55,65 @@
                                     │ Message
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                              Command                                     │
+│                           Agent Core                                     │
 │                                                                          │
-│   Responsibility:                                                        │
-│   - 解析 slash command                                                   │
-│   - 识别命令类型                                                         │
-│   - 提取参数                                                             │
+│   ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐       │
+│   │  Command Parser │  │   Dispatcher    │  │ Session Memory  │       │
+│   │                 │  │                  │  │                 │       │
+│   │ - Parse slash   │  │ - Route to       │  │ - Current msg   │       │
+│   │   command       │  │   Handler        │  │ - Discuss hist  │       │
+│   │ - Extract args  │  │ - No biz logic  │  │ - Project ctx   │       │
+│   └─────────────────┘  └─────────────────┘  └─────────────────┘       │
+│                                    │                                    │
+│                                    ▼                                    │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                        LLM Provider                              │   │
+│   │                                                                  │   │
+│   │   Responsibility:                                               │   │
+│   │   - Chat (讨论、推理、生成)                                       │   │
+│   │   - Code Review                                                  │   │
+│   │                                                                  │   │
+│   │   Interface:                                                     │   │
+│   │   - Chat(ctx, messages) (string, error)                         │   │
+│   │   - Review(ctx, diff) (*ReviewResult, error)                    │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                    │                                    │
+│                                    ▼                                    │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                       Tool System                                │   │
+│   │                                                                  │   │
+│   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │   │
+│   │   │  GitHub API  │  │ Coding Agent │  │ File System  │         │   │
+│   │   │              │  │              │  │              │         │   │
+│   │   │ - Issue CRUD │  │ - Claude Code│  │ - Read/Write │         │   │
+│   │   │ - PR CRUD    │  │ - OpenCode    │  │ - expandPath │         │   │
+│   │   │ - Comments   │  │              │  │              │         │   │
+│   │   └──────────────┘  └──────────────┘  └──────────────┘         │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                    │                                    │
+│                                    ▼                                    │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                     Task Handlers                               │   │
+│   │                                                                  │   │
+│   │   ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌────────┐│   │
+│   │   │ Discuss │  │   TDD   │  │   Fix   │  │ Review  │  │ Revise ││   │
+│   │   │         │  │         │  │         │  │         │  │        ││   │
+│   │   │ - Chat  │  │ - Design│  │ - Impl  │  │ - Review│  │ - Fix  ││   │
+│   │   │   with  │  │ - Stub  │  │   logic │  │   code  │  │   feed ││   │
+│   │   │   LLM   │  │ - Test  │  │         │  │         │  │  back  ││   │
+│   │   └─────────┘  └─────────┘  └─────────┘  └─────────┘  └────────┘│   │
+│   └─────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
-│   Interface:                                                             │
-│   - Parse(Message) *Command                                              │
-│                                                                          │
-│   Command Types:                                                         │
-│   - CmdOn          → Project                                             │
-│   - CmdNew         → Discuss                                             │
-│   - CmdFix         → Develop                                             │
-│   - CmdReview      → Review                                              │
-│   - CmdRevise      → Revise                                              │
-│                                                                          │
-│   Note: 无 slash command 的消息 → Discuss Handler                         │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
-                                    │ Command
+                                    │ Result
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                             Dispatch                                     │
+│                           Display Layer                                  │
 │                                                                          │
 │   Responsibility:                                                        │
-│   - 根据 Command.Type 分发到对应的 Handler                                │
-│   - 无 Command（普通消息）→ Discuss Handler                              │
-│                                                                          │
-│   Interface:                                                             │
-│   - Dispatch(Command, *Project) *Result                                  │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                    ┌───────────────┼───────────────┐
-                    │               │               │
-                    ▼               ▼               ▼
-┌─────────────────────────┐ ┌─────────────────────────┐ ┌─────────────────────────┐
-│        Discuss          │ │        Develop          │ │        Review           │
-│                         │ │                         │ │                         │
-│   Context:              │ │   Dependencies:          │ │   Dependencies:         │
-│   - 当前讨论内容         │ │   - GitHub              │ │   - GitHub              │
-│   - 确认文档（暂存）     │ │   - Coder               │ │   - LLM Provider        │
-│                         │ │                         │ │                         │
-│   Output:                │ │   Output:                │ │   Output:                │
-│   - 确认文档（内存）      │ │   - GitHub PR           │ │   - PR Comment          │
-└─────────────────────────┘ └─────────────────────────┘ └─────────────────────────┘
-                                        │
-                                        │
-                                        ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              Revise                                     │
-│                                                                          │
-│   Dependencies:                                                          │
-│   - GitHub                                                              │
-│   - Coder                                                               │
-│                                                                          │
-│   Output:                                                                │
-│   - Updated GitHub PR                                                    │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│                            Infrastructure                               │
-│                                                                          │
-│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐       │
-│   │     Project      │  │    GitHub API    │  │   LLM Provider   │       │
-│   │                  │  │                  │  │                  │       │
-│   │  Responsibility: │  │  Responsibility: │  │  Responsibility: │       │
-│   │  - 读取 git remote│  │  - Issue CRUD    │  │  - Chat          │       │
-│   │  - 项目路径解析    │  │  - PR CRUD       │  │  - Review        │       │
-│   │  - 设置讨论模式    │  │  - Comments      │  │                  │       │
-│   └──────────────────┘  └──────────────────┘  └──────────────────┘       │
-│                                                                          │
-│   ┌──────────────────┐  ┌──────────────────┐                           │
-│   │      Coder       │  │     Storage      │                           │
-│   │                  │  │                  │                           │
-│   │  Responsibility: │  │  Responsibility: │                           │
-│   │  - 代码实现        │  │  - Discuss 暂存  │                           │
-│   │  - 代码修改        │  │  - 项目配置      │                           │
-│   └──────────────────┘  └──────────────────┘                           │
+│   - 格式化输出给 Human                                                   │
+│   - 支持多平台格式（Telegram/Feishu/Markdown/CLI）                       │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -122,39 +123,75 @@
 
 ### 2.1 Module List
 
-| Module | Responsibility | Boundary |
-|--------|---------------|----------|
-| **Channel** | IM 消息收发 | 输入/输出的唯一通道 |
-| **Command** | 解析 slash command | 只解析，不执行 |
-| **Dispatch** | 分发命令到 Handler | 路由，无业务逻辑 |
-| **Discuss** | 需求讨论 | 业务：讨论流程 |
-| **Develop** | 编码开发 | 业务：开发流程 |
-| **Review** | 代码审查 | 业务：review 流程 |
-| **Revise** | 代码修正 | 业务：修正流程 |
-| **Project** | 项目上下文 | 数据：从 git remote 读取 |
-| **GitHub** | GitHub API | 外部依赖：GitHub |
-| **LLM** | LLM 调用 | 外部依赖：LLM Provider |
-| **Coder** | 编码执行 | 外部依赖：Claude Code / OpenCode |
-| **Storage** | 本地存储 | 数据持久化 |
+| Module | Layer | Responsibility | Public API |
+|--------|-------|---------------|------------|
+| **Channel** | Input/Output | IM 平台接入 | `Receive()`, `Send()` |
+| **Command** | Core | 解析 slash command | `Parse(Message) *Command` |
+| **Dispatcher** | Core | 命令分发 | `Dispatch(Command, *Project) *Result` |
+| **Session** | Core | 会话上下文管理 | `AddMessage()`, `GetHistory()`, `GetProject()` |
+| **LLM** | Core | AI 推理 | `Chat()`, `Review()` |
+| **DiscussHandler** | Handler | 需求讨论 | `Handle(ctx, msg, session) *Result` |
+| **TDDHandler** | Handler | 架构设计 + stub + 测试 | `Handle(ctx, issue, session) *Result` |
+| **FixHandler** | Handler | 逻辑实现 | `Handle(ctx, issue, session) *Result` |
+| **ReviewHandler** | Handler | 代码审查 | `Handle(ctx, pr, session) *Result` |
+| **ReviseHandler** | Handler | 代码修正 | `Handle(ctx, pr, session) *Result` |
+| **GitHub** | Tool | GitHub API | `GetIssue()`, `CreateIssue()`, `CreatePR()`, etc. |
+| **Coder** | Tool | 编码执行 | `TDD()`, `Implement()`, `Revise()` |
+| **PathResolver** | Tool | 路径解析 | `Resolve(path) string` |
 
 ### 2.2 Dependency Rules
 
 ```
-Channel → Command → Dispatch → [Discuss | Develop | Review | Revise]
-                                       ↓
-                              [Project | GitHub | LLM | Coder | Storage]
+Channel → Command → Dispatcher → [Handler Layer]
+                                   │
+                                   ├── Session (上下文)
+                                   ├── LLM (推理能力)
+                                   └── Tool Layer (GitHub, Coder, PathResolver)
 ```
 
-**依赖方向（只能依赖下游）：**
-- Channel 可以被 Command 依赖（消息输入）
-- Command 可以被 Dispatch 依赖（命令输入）
-- Dispatch 可以依赖所有 Handler
-- Handler 可以依赖 Project、GitHub、LLM、Coder、Storage
+**依赖方向规则：**
+- 上层可以依赖下层
+- 下层不能依赖上层
+- 同层之间不允许循环依赖
 
-**禁止反向依赖：**
-- Handler 不能依赖 Dispatch
-- Command 不能依赖 Channel
-- 上游模块不能依赖下游模块
+### 2.3 数据流
+
+```
+Human Message
+    │
+    ▼
+Channel.Receive()
+    │
+    ▼
+Command.Parse(message)
+    │
+    ▼
+Dispatcher.Dispatch(cmd, session)
+    │
+    ├── nil (普通消息) → DiscussHandler
+    ├── /on           → ProjectHandler (设置上下文)
+    ├── /new          → DiscussHandler (创建 Issue)
+    ├── /tdd          → TDDHandler
+    ├── /fix          → FixHandler
+    ├── /review       → ReviewHandler
+    └── /revise       → ReviseHandler
+    │
+    ▼
+Handler.Handle()
+    │
+    ├── LLM.Chat()        (讨论、推理)
+    ├── GitHub.*()       (Issue/PR 操作)
+    └── Coder.*()        (编码执行)
+    │
+    ▼
+Result.Display
+    │
+    ▼
+Channel.Send(display)
+    │
+    ▼
+Human
+```
 
 ---
 
@@ -164,237 +201,610 @@ Channel → Command → Dispatch → [Discuss | Develop | Review | Revise]
 
 ```go
 // channel/channel.go
+
+// Message 接收自 Human
+type Message struct {
+    Raw       string                 // 原始消息
+    Platform  string                 // telegram, feishu, cli, ws
+    ChatID    string                 // 聊天 ID
+    UserID    string                 // 用户 ID
+    Timestamp time.Time              // 时间戳
+}
+
+// Display 发送给 Human
+type Display struct {
+    Type    DisplayType              // text, code, image, file
+    Content string
+    Metadata map[string]string       // platform-specific
+}
+
+type DisplayType string
+
+const (
+    DisplayText  DisplayType = "text"
+    DisplayCode  DisplayType = "code"
+    DisplayImage DisplayType = "image"
+    DisplayFile  DisplayType = "file"
+)
+
 type Channel interface {
-    // 接收 Human 消息
+    // Receive 接收 Human 消息
     Receive(ctx context.Context) (*Message, error)
 
-    // 发送消息给 Human
+    // Send 发送消息给 Human
     Send(ctx context.Context, display Display) error
 
-    // 启动监听
+    // Start 启动监听
     Start(ctx context.Context, handler MessageHandler) error
 
-    // 停止监听
+    // Stop 停止监听
     Stop(ctx context.Context) error
 }
 
-// 支持的实现：
-// - TelegramChannel
-// - FeishuChannel
-// - DiscordChannel
-// - WhatsAppChannel
-// - CLIChannel
-// - WebSocketChannel
+type MessageHandler interface {
+    Handle(ctx context.Context, msg *Message) (*Result, error)
+}
 ```
 
 ### 3.2 Command
 
 ```go
 // command/command.go
+
 type CommandType string
 
 const (
-    CmdOn          CommandType = "on"           // 切换项目
-    CmdNew         CommandType = "new"            // 创建 Issue
-    CmdFix         CommandType = "fix"          // 编码开发
-    CmdReview      CommandType = "review"       // 代码审查
-    CmdRevise      CommandType = "revise"       // 修正
+    CmdOn      CommandType = "on"
+    CmdNew     CommandType = "new"
+    CmdTDD     CommandType = "tdd"
+    CmdFix     CommandType = "fix"
+    CmdReview  CommandType = "review"
+    CmdRevise  CommandType = "revise"
 )
 
 type Command struct {
     Type   CommandType
-    Raw    string
-    Params map[string]string
+    Raw    string                 // 原始命令
+    Params string                  // 命令参数（issue/pr URL 或 number）
 }
 
 type Parser interface {
-    // 解析消息为命令
+    // Parse 解析消息为命令
     // 如果不是 slash command，返回 nil（由 Discuss Handler 处理）
     Parse(msg *Message) *Command
 }
 ```
 
-### 3.3 Dispatch
+### 3.3 Session
+
+```go
+// session/session.go
+
+// DiscussMessage 讨论消息
+type DiscussMessage struct {
+    Role    string                 // "human" | "ai"
+    Content string
+    Time    time.Time
+}
+
+// Project 项目上下文
+type Project struct {
+    Workdir string                 // /Users/bin/code/myapp
+    Owner   string                 // owner
+    Repo    string                 // repo
+    Branch  string                 // main
+}
+
+// DiscussContext 讨论上下文
+type DiscussContext struct {
+    Project *Project
+    Messages []DiscussMessage       // 讨论历史
+}
+
+// Session 会话管理
+type Session interface {
+    // 项目上下文
+    SetProject(project *Project)
+    GetProject() *Project
+
+    // 讨论上下文
+    AddDiscussMessage(msg *DiscussMessage)
+    GetDiscussHistory() []*DiscussMessage
+    ClearDiscussHistory()
+
+    // Session 持久化
+    Save() error
+    Load(chatID string) error
+}
+```
+
+### 3.4 LLM Provider
+
+```go
+// llm/llm.go
+
+// Message 对话消息
+type Message struct {
+    Role    string                 // "system", "user", "assistant"
+    Content string
+}
+
+// ReviewResult 审查结果
+type ReviewResult struct {
+    Comments []*ReviewComment
+    Summary  string
+}
+
+type LLMProvider interface {
+    // Chat 对话
+    Chat(ctx context.Context, messages []Message) (string, error)
+
+    // Review 代码审查
+    Review(ctx context.Context, diff string) (*ReviewResult, error)
+}
+```
+
+### 3.5 Path Resolver
+
+```go
+// path/resolver.go
+
+// 遵循 GTW expandPath 逻辑
+// 支持格式：
+//   /Users/bin/code/myapp     → 直接使用
+//   ~/code/myapp              → 替换为 homedir
+//   ~user/code/myapp           → 替换为该用户的 home
+//   ./code/myapp               → 相对当前工作目录
+//   ../code/myapp              → 相对当前工作目录
+//   code/myapp                 → 默认视为 ~/code/myapp
+
+type Resolver interface {
+    Resolve(path string) (string, error)  // 返回绝对路径
+}
+```
+
+### 3.6 GitHub Client
+
+```go
+// github/github.go
+
+type Issue struct {
+    Number    int
+    Title     string
+    Body      string
+    State     string
+    URL       string
+    Labels    []string
+}
+
+type PR struct {
+    Number     int
+    Title      string
+    Body       string
+    State      string
+    Head       string                 // branch name
+    Base       string                 // target branch
+    URL        string
+    IsDraft    bool
+}
+
+type ReviewComment struct {
+    ID        int
+    Author    string
+    Body      string
+    Path      string
+    Line      int
+    CommitID  string
+}
+
+type GitHubClient interface {
+    // Issue
+    GetIssue(ctx context.Context, owner, repo string, number int) (*Issue, error)
+    CreateIssue(ctx context.Context, owner, repo string, title, body string) (*Issue, error)
+
+    // PR
+    GetPR(ctx context.Context, owner, repo string, number int) (*PR, error)
+    CreatePR(ctx context.Context, owner, repo, title, body, head, base string, draft bool) (*PR, error)
+    UpdatePR(ctx context.Context, owner, repo string, number int, title, body string) error
+
+    // Comments
+    GetIssueComments(ctx context.Context, owner, repo string, number int) ([]*ReviewComment, error)
+    GetPRComments(ctx context.Context, owner, repo string, number int) ([]*ReviewComment, error)
+    PostPRComment(ctx context.Context, owner, repo string, number int, body string) error
+
+    // Reviews
+    CreateReview(ctx context.Context, owner, repo string, number int, comments []*ReviewComment, body string) error
+}
+```
+
+### 3.7 Coder
+
+```go
+// coder/coder.go
+
+// CodingAgent 编码代理接口
+type CodingAgent interface {
+    // TDD 架构设计 + stub + 测试
+    // 返回: branch name, error
+    TDD(ctx context.Context, workdir string, issue *Issue) (string, error)
+
+    // Implement 逻辑实现
+    // 返回: error
+    Implement(ctx context.Context, workdir string, issue *Issue) error
+
+    // Revise 根据反馈修正
+    // 返回: error
+    Revise(ctx context.Context, workdir string, prURL string, comments []*ReviewComment) error
+}
+```
+
+### 3.8 Dispatcher
 
 ```go
 // dispatch/dispatch.go
-type Dispatcher interface {
-    // 分发命令到对应 Handler
-    // cmd 为 nil 时，默认分发到 Discuss Handler
-    Dispatch(ctx context.Context, cmd *Command, project *Project) (*Result, error)
-}
 
 type Result struct {
-    Display  Display
+    Display  *Display
     IssueURL string
     PRURL    string
     Error    error
 }
+
+type Dispatcher interface {
+    // Dispatch 分发命令到对应 Handler
+    Dispatch(ctx context.Context, cmd *Command, session *Session) (*Result, error)
+}
 ```
 
-### 3.4 Project
+### 3.9 Task Handlers
 
 ```go
-// project/project.go
-type Project struct {
-    Path   string
-    Remote Remote
-    Branch string
-}
+// handler/handler.go
 
-type Remote struct {
-    URL   string  // 例如 github.com/owner/repo
-    Owner string
-    Repo  string
-}
-
-type Resolver interface {
-    // 根据路径解析项目
-    Resolve(path string) (*Project, error)
-
-    // 设置当前项目上下文
-    SetCurrent(project *Project)
-
-    // 获取当前项目上下文
-    GetCurrent() *Project
+type TaskHandler interface {
+    Handle(ctx context.Context, cmd *Command, session *Session) (*Result, error)
 }
 ```
 
-### 3.5 Discuss Handler
+#### Discuss Handler
 
 ```go
 // handler/discuss.go
+
+// DiscussHandler 需求讨论
+// 处理 /new 和普通消息
 type DiscussHandler struct {
-    llm     LLMProvider
-    storage Storage
-    github  GitHubClient
-    context *DiscussContext  // 当前讨论状态（内存）
+    llm    LLMProvider
+    github GitHubClient
 }
 
-type DiscussContext struct {
-    Project  *Project
-    Messages []Message
-    Document *ConfirmDocument  // 确认文档（暂存）
+func (h *DiscussHandler) Handle(ctx context.Context, cmd *Command, session *Session) (*Result, error) {
+    switch cmd.Type {
+    case CmdNew:
+        return h.createIssue(ctx, session)
+    case nil:
+        return h.discuss(ctx, cmd.Raw, session)
+    }
+    return nil, ErrUnknownCommand
 }
 
-type ConfirmDocument struct {
-    Title     string
-    Features  []string
-    Scope     Scope
-    Solution  string
-    Criteria  []string
+func (h *DiscussHandler) discuss(ctx context.Context, msg string, session *Session) (*Result, error) {
+    // 1. 添加 Human 消息到 session
+    session.AddDiscussMessage(&DiscussMessage{
+        Role:    "human",
+        Content: msg,
+        Time:    time.Now(),
+    })
+
+    // 2. 获取讨论历史
+    history := session.GetDiscussHistory()
+
+    // 3. 调用 LLM 讨论
+    messages := buildLLMMessages(history)
+    response, err := h.llm.Chat(ctx, messages)
+    if err != nil {
+        return nil, err
+    }
+
+    // 4. 添加 AI 响应到 session
+    session.AddDiscussMessage(&DiscussMessage{
+        Role:    "ai",
+        Content: response,
+        Time:    time.Now(),
+    })
+
+    // 5. 保存 session
+    session.Save()
+
+    return &Result{
+        Display: &Display{
+            Type:    DisplayText,
+            Content: response,
+        },
+    }, nil
 }
 
-// Handle 实现 TaskHandler 接口
-// 注意：Discuss Handler 处理两类输入：
-// 1. CmdNew         → 创建 Issue
-// 2. 普通消息（cmd == nil）→ 讨论迭代
-func (h *DiscussHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
+func (h *DiscussHandler) createIssue(ctx context.Context, session *Session) (*Result, error) {
+    // 1. 获取项目上下文
+    project := session.GetProject()
+    if project == nil {
+        return nil, ErrNoProjectContext
+    }
 
-// 子方法：
-// - discuss(msg, context)     → 迭代确认
-// - createIssue(context)     → 创建 Issue
+    // 2. 从 session 获取讨论内容
+    history := session.GetDiscussHistory()
+    if len(history) == 0 {
+        return nil, ErrNoDiscussContent
+    }
+
+    // 3. 调用 LLM 整理成 Issue 格式
+    messages := buildIssuePrompt(history)
+    body, err := h.llm.Chat(ctx, messages)
+    if err != nil {
+        return nil, err
+    }
+
+    // 4. 提取标题（第一行）
+    lines := strings.SplitN(body, "\n", 2)
+    title := strings.Trim(lines[0], "# ")
+    if len(lines) > 1 {
+        body = lines[1]
+    }
+
+    // 5. 创建 GitHub Issue
+    issue, err := h.github.CreateIssue(ctx, project.Owner, project.Repo, title, body)
+    if err != nil {
+        return nil, err
+    }
+
+    // 6. 清除讨论历史
+    session.ClearDiscussHistory()
+    session.Save()
+
+    return &Result{
+        Display: &Display{
+            Type:    DisplayText,
+            Content: fmt.Sprintf("Issue created: %s", issue.URL),
+        },
+        IssueURL: issue.URL,
+    }, nil
+}
 ```
 
-### 3.6 Develop Handler
+#### TDD Handler
 
 ```go
-// handler/develop.go
-type DevelopHandler struct {
+// handler/tdd.go
+
+// TDDHandler 架构设计 + stub + 测试
+type TDDHandler struct {
     github GitHubClient
-    coder  Coder
+    coder  CodingAgent
 }
 
-// Handle 实现 TaskHandler 接口
-func (h *DevelopHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
+func (h *TDDHandler) Handle(ctx context.Context, cmd *Command, session *Session) (*Result, error) {
+    project := session.GetProject()
+    if project == nil {
+        return nil, ErrNoProjectContext
+    }
+
+    // 1. 解析 Issue URL/number
+    owner, repo, number, err := parseURL(cmd.Params, project)
+    if err != nil {
+        return nil, err
+    }
+
+    // 2. 获取 Issue 内容
+    issue, err := h.github.GetIssue(ctx, owner, repo, number)
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. 获取讨论内容作为上下文
+    history := session.GetDiscussHistory()
+
+    // 4. 调用 Coder 执行 TDD
+    branch, err := h.coder.TDD(ctx, project.Workdir, issue)
+    if err != nil {
+        return nil, err
+    }
+
+    // 5. 创建 Draft PR
+    pr, err := h.github.CreatePR(ctx, owner, repo,
+        fmt.Sprintf("TDD: %s", issue.Title),
+        fmt.Sprintf("Issue: %s\n\n%s", issue.URL, formatDiscuss(history)),
+        branch,
+        "main",
+        true,  // draft
+    )
+    if err != nil {
+        return nil, err
+    }
+
+    return &Result{
+        Display: &Display{
+            Type:    DisplayText,
+            Content: fmt.Sprintf("TDD PR created (draft): %s", pr.URL),
+        },
+        PRURL: pr.URL,
+    }, nil
+}
 ```
 
-### 3.7 Review Handler
+#### Fix Handler
+
+```go
+// handler/fix.go
+
+// FixHandler 逻辑实现
+type FixHandler struct {
+    github GitHubClient
+    coder  CodingAgent
+}
+
+func (h *FixHandler) Handle(ctx context.Context, cmd *Command, session *Session) (*Result, error) {
+    project := session.GetProject()
+    if project == nil {
+        return nil, ErrNoProjectContext
+    }
+
+    // 1. 解析 Issue URL/number
+    owner, repo, number, err := parseURL(cmd.Params, project)
+    if err != nil {
+        return nil, err
+    }
+
+    // 2. 获取 Issue 内容
+    issue, err := h.github.GetIssue(ctx, owner, repo, number)
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. 调用 Coder 实现逻辑
+    err = h.coder.Implement(ctx, project.Workdir, issue)
+    if err != nil {
+        return nil, err
+    }
+
+    // 4. 查找对应的 Draft PR
+    // TODO: 需要记录 TDD 创建的 PR 信息
+    prs, err := h.github.GetPRsByBranch(ctx, owner, repo, issue.HeadBranch)
+    if err != nil {
+        return nil, err
+    }
+
+    if len(prs) > 0 {
+        // 如果有 Draft PR，转换为正式 PR
+        if prs[0].IsDraft {
+            err = h.github.UpdatePR(ctx, owner, repo, prs[0].Number, "", "")
+            if err != nil {
+                return nil, err
+            }
+        }
+
+        return &Result{
+            Display: &Display{
+                Type:    DisplayText,
+                Content: fmt.Sprintf("PR updated: %s", prs[0].URL),
+            },
+            PRURL: prs[0].URL,
+        }, nil
+    }
+
+    return &Result{
+        Display: &Display{
+            Type:    DisplayText,
+            Content: "Implementation complete",
+        },
+    }, nil
+}
+```
+
+#### Review Handler
 
 ```go
 // handler/review.go
+
+// ReviewHandler 代码审查
 type ReviewHandler struct {
     llm    LLMProvider
     github GitHubClient
 }
 
-// Handle 实现 TaskHandler 接口
-func (h *ReviewHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
+func (h *ReviewHandler) Handle(ctx context.Context, cmd *Command, session *Session) (*Result, error) {
+    project := session.GetProject()
+    if project == nil {
+        return nil, ErrNoProjectContext
+    }
+
+    // 1. 解析 PR URL/number
+    owner, repo, number, err := parseURL(cmd.Params, project)
+    if err != nil {
+        return nil, err
+    }
+
+    // 2. 获取 PR diff
+    pr, err := h.github.GetPR(ctx, owner, repo, number)
+    if err != nil {
+        return nil, err
+    }
+
+    diff, err := h.github.GetPRDiff(ctx, owner, repo, number)
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. 调用 LLM 审查
+    result, err := h.llm.Review(ctx, diff)
+    if err != nil {
+        return nil, err
+    }
+
+    // 4. 写入 GitHub PR Comment
+    if len(result.Comments) > 0 {
+        err = h.github.CreateReview(ctx, owner, repo, number, result.Comments, result.Summary)
+        if err != nil {
+            return nil, err
+        }
+    } else {
+        err = h.github.PostPRComment(ctx, owner, repo, number, result.Summary)
+        if err != nil {
+            return nil, err
+        }
+    }
+
+    return &Result{
+        Display: &Display{
+            Type:    DisplayText,
+            Content: fmt.Sprintf("Review posted: %s\n\n%s", pr.URL, result.Summary),
+        },
+        PRURL: pr.URL,
+    }, nil
+}
 ```
 
-### 3.8 Revise Handler
+#### Revise Handler
 
 ```go
 // handler/revise.go
+
+// ReviseHandler 代码修正
 type ReviseHandler struct {
     github GitHubClient
-    coder  Coder
+    coder  CodingAgent
 }
 
-// Handle 实现 TaskHandler 接口
-func (h *ReviseHandler) Handle(ctx context.Context, cmd *Command, project *Project) (*Result, error)
-```
+func (h *ReviseHandler) Handle(ctx context.Context, cmd *Command, session *Session) (*Result, error) {
+    project := session.GetProject()
+    if project == nil {
+        return nil, ErrNoProjectContext
+    }
 
-### 3.9 GitHub Client
+    // 1. 解析 PR URL/number
+    owner, repo, number, err := parseURL(cmd.Params, project)
+    if err != nil {
+        return nil, err
+    }
 
-```go
-// github/github.go
-type GitHubClient interface {
-    // Issue
-    GetIssue(ctx context.Context, url string) (*Issue, error)
-    CreateIssue(ctx context.Context, project *Project, doc *ConfirmDocument) (*Issue, error)
+    // 2. 获取 PR Review Comments
+    comments, err := h.github.GetPRComments(ctx, owner, repo, number)
+    if err != nil {
+        return nil, err
+    }
 
-    // PR
-    GetPR(ctx context.Context, url string) (*PR, error)
-    CreatePR(ctx context.Context, project *Project, branch string, doc *ConfirmDocument) (*PR, error)
-    GetReviewComments(ctx context.Context, pr *PR) ([]*ReviewComment, error)
+    // 3. 调用 Coder 修正代码
+    err = h.coder.Revise(ctx, project.Workdir, fmt.Sprintf("%s/%s#%d", owner, repo, number), comments)
+    if err != nil {
+        return nil, err
+    }
 
-    // Comments
-    PostReviewComment(ctx context.Context, pr *PR, review *ReviewResult) error
-
-    // Push
-    PushBranch(ctx context.Context, project *Project, branch string) error
-}
-```
-
-### 3.10 LLM Provider
-
-```go
-// provider/llm.go
-type LLMProvider interface {
-    // 对话
-    Chat(ctx context.Context, prompt string) (string, error)
-
-    // 代码审查
-    Review(ctx context.Context, diff string) (*ReviewResult, error)
-}
-```
-
-### 3.11 Coder
-
-```go
-// coder/coder.go
-type Coder interface {
-    // 根据 Issue 实现代码
-    Implement(ctx context.Context, project *Project, issue *Issue) error
-
-    // 根据 Review 反馈修正代码
-    Revise(ctx context.Context, project *Project, pr *PR, comments []*ReviewComment) error
-}
-```
-
-### 3.12 Storage
-
-```go
-// storage/storage.go
-type Storage interface {
-    // Discuss 上下文
-    SaveDiscussContext(ctx *DiscussContext) error
-    GetDiscussContext(projectID string) (*DiscussContext, error)
-
-    // 项目配置
-    SaveProject(project *Project) error
-    GetProject(path string) (*Project, error)
+    return &Result{
+        Display: &Display{
+            Type:    DisplayText,
+            Content: "Code revised based on review feedback",
+        },
+        PRURL: fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, number),
+    }, nil
 }
 ```
 
@@ -402,55 +812,37 @@ type Storage interface {
 
 ## 4. Data Models
 
-### 4.1 Issue
+### 4.1 讨论文档格式（LLM 生成）
 
-```go
-type Issue struct {
-    Number    int
-    Title     string
-    Body      string
-    State     string
-    URL       string
-    Project   *Project
-}
+```markdown
+## 标题
+[标题]
+
+## 功能
+- [具体功能点]
+
+## 范围
+- 包含：[包含哪些]
+- 不包含：[不包含哪些]
+
+## 技术方案
+[实现方式]
+
+## 验收标准
+- [ ] [标准 1]
+- [ ] [标准 2]
 ```
 
-### 4.2 PR
+### 4.2 PR Body 格式
 
-```go
-type PR struct {
-    Number    int
-    Title     string
-    Body      string
-    State     string
-    Head      string  // branch name
-    Base      string  // target branch
-    URL       string
-    Diff      string
-    Project   *Project
-}
-```
+```markdown
+Issue: https://github.com/owner/repo/issues/123
 
-### 4.3 ReviewComment
+## 讨论摘要
+[从 session 中提取的讨论内容]
 
-```go
-type ReviewComment struct {
-    ID        int
-    Author    string
-    Body      string
-    Path      string
-    Line      int
-    CreatedAt time.Time
-}
-```
-
-### 4.4 ReviewResult
-
-```go
-type ReviewResult struct {
-    Comments []*ReviewComment
-    Summary  string
-}
+## 变更内容
+[stub 实现 / 逻辑实现说明]
 ```
 
 ---
@@ -459,13 +851,14 @@ type ReviewResult struct {
 
 | Error | Module | Description | Recovery |
 |-------|--------|-------------|----------|
-| `ErrProjectNotFound` | Project | 目录不存在 | Human 确认路径 |
-| `ErrGitRemoteNotFound` | Project | 无 git remote | Human 确认目录 |
-| `ErrGitHubAuth` | GitHub | GitHub 认证失败 | 检查 GITHUB_TOKEN |
+| `ErrNoProjectContext` | Session | 没有设置项目上下文 | Human 执行 `/on <path>` |
+| `ErrNoDiscussContent` | Discuss | 讨论内容为空 | Human 补充讨论 |
+| `ErrInvalidPath` | PathResolver | 路径不存在或无效 | Human 确认路径 |
+| `ErrGitRemoteNotFound` | Project | 目录不是 git 仓库 | Human 确认目录 |
 | `ErrIssueNotFound` | GitHub | Issue 不存在 | Human 确认 URL |
 | `ErrPRNotFound` | GitHub | PR 不存在 | Human 确认 URL |
 | `ErrLLM` | LLM | LLM 调用失败 | 自动重试 3 次 |
-| `ErrCoder` | Coder | 编码失败 | Human 介入 |
+| `ErrCoder` | Coder | 编码执行失败 | Human 介入 |
 
 ---
 
@@ -473,7 +866,7 @@ type ReviewResult struct {
 
 ### 6.1 Credentials
 
-- GitHub Token 从环境变量读取（`GITHUB_TOKEN`）
+- GitHub Token 从环境变量 `GITHUB_TOKEN` 读取
 - 不持久化存储 token
 - 不打印 token 到日志
 
@@ -487,7 +880,7 @@ type ReviewResult struct {
 
 - 所有 slash command 由 Human 执行
 - AI 无法绕过 Human 执行关键操作
-- AI 执行结果需要 Human 确认后才能继续
+- AI 执行结果通过 Display 返回给 Human
 
 ---
 
@@ -497,72 +890,98 @@ type ReviewResult struct {
 humera/
 ├── cmd/
 │   └── humera/
-│       └── main.go
+│       └── main.go              # 入口
 │
-├── internal/
-│   ├── channel/          # IM 平台接入
-│   │   ├── channel.go
-│   │   ├── telegram.go
-│   │   ├── feishu.go
-│   │   ├── discord.go
-│   │   ├── cli.go
-│   │   └── websocket.go
-│   │
-│   ├── command/          # 命令解析
-│   │   ├── command.go
-│   │   └── parser.go
-│   │
-│   ├── dispatch/          # 命令分发
-│   │   └── dispatch.go
-│   │
-│   ├── handler/           # 任务处理器
-│   │   ├── handler.go     # 接口定义
-│   │   ├── discuss.go
-│   │   ├── develop.go
-│   │   ├── review.go
-│   │   └── revise.go
-│   │
-│   ├── project/           # 项目上下文
-│   │   └── project.go
-│   │
-│   ├── github/            # GitHub API
-│   │   └── github.go
-│   │
-│   ├── provider/          # LLM 接入
-│   │   └── llm.go
-│   │
-│   ├── coder/             # 编码执行
-│   │   └── coder.go
-│   │
-│   └── storage/           # 本地存储
-│       └── storage.go
+├── channel/                       # IM 平台接入
+│   ├── channel.go                # Channel interface
+│   ├── telegram.go
+│   ├── feishu.go
+│   ├── discord.go
+│   ├── cli.go
+│   └── ws.go                     # WebSocket
 │
-├── pkg/
-│   └── display/           # 格式化输出
-│       └── display.go
+├── command/                       # 命令解析
+│   └── parser.go                 # slash command parser
 │
-└── test/
-    └── integration/        # 集成测试
+├── dispatch/                      # 命令分发
+│   └── dispatcher.go
+│
+├── session/                       # 会话管理
+│   ├── session.go                # Session interface
+│   └── storage.go                 # SQLite storage
+│
+├── llm/                           # LLM 调用
+│   ├── provider.go                # LLMProvider interface
+│   ├── openai.go
+│   └── anthropic.go
+│
+├── handler/                       # 任务处理器
+│   ├── handler.go                # TaskHandler interface
+│   ├── discuss.go
+│   ├── tdd.go
+│   ├── fix.go
+│   ├── review.go
+│   └── revise.go
+│
+├── github/                        # GitHub API
+│   └── client.go                 # GitHubClient interface
+│
+├── coder/                         # 编码代理
+│   ├── agent.go                  # CodingAgent interface
+│   ├── claude_code.go            # Claude Code implementation
+│   └── opencode.go               # OpenCode implementation
+│
+├── path/                          # 路径解析
+│   └── resolver.go               # expandPath logic
+│
+├── display/                       # 输出格式化
+│   └── formatter.go
+│
+├── errors/                        # 错误定义
+│   └── errors.go
+│
+└── tests/                         # 测试
+    └── ...
 ```
 
 ---
 
-## 8. External Dependencies
+## 8. Implementation Notes
 
-### 8.1 GitHub API
+### 8.1 编码代理选择
 
-- Issue CRUD
-- PR CRUD
-- Review Comments
-- 认证：Personal Access Token
+优先使用 Claude Code：
+```bash
+claude --print --model sonnet-4-6-20250514 --system-prefill "<system>" --prefill "<user>" < prompt.txt
+```
 
-### 8.2 LLM Provider
+备选 OpenCode：
+```bash
+opencode -m "model" -c "指令"
+```
 
-- Chat API（确认、建议生成）
-- 支持：OpenAI、Anthropic、Ollama、本地模型
+### 8.2 Session 持久化
 
-### 8.3 Coder
+使用 SQLite 存储 session：
+- 表：sessions (chat_id, project_json, discuss_json, updated_at)
+- 表：discuss_messages (session_id, role, content, time)
 
-- Claude Code CLI
-- OpenCode CLI
-- 支持自定义 coder 实现
+### 8.3 TDD PR 流程
+
+1. `/tdd` → Coder.TDD() → 创建 stub 分支
+2. GitHub 创建 Draft PR
+3. `/fix` → Coder.Implement() → 继续同一分支
+4. 如果有 Draft PR，转为正式 PR
+
+### 8.4 路径解析实现
+
+参考 GTW `utils/path.js` 的 `expandPath` 逻辑：
+```go
+func expandPath(path string) string {
+    // ~ → homedir
+    // ~user → user homedir
+    // / → absolute
+    // ./ → relative to cwd
+    // bare → ~/bare
+}
+```
