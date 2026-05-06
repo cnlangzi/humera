@@ -56,9 +56,12 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 
 | Command | 参数格式 | 示例 |
 |---------|---------|------|
-| `/fix` | Issue URL 或 `owner/repo#number` | `/fix https://github.com/owner/repo/issues/123` 或 `/fix owner/repo#123` |
-| `/review` | PR URL 或 `owner/repo#number` | `/review https://github.com/owner/repo/pull/456` 或 `/review owner/repo#456` |
-| `/revise` | PR URL 或 `owner/repo#number` | `/revise https://github.com/owner/repo/pull/456` 或 `/revise owner/repo#456` |
+| `/fix` | Issue URL、完整 `owner/repo#number`、或仅 `number` | `/fix https://github.com/owner/repo/issues/123` 或 `/fix owner/repo#123` 或 `/fix 123` |
+| `/review` | PR URL、完整 `owner/repo#number`、或仅 `number` | `/review https://github.com/owner/repo/pull/456` 或 `/review owner/repo#456` 或 `/review 456` |
+| `/revise` | PR URL、完整 `owner/repo#number`、或仅 `number` | `/revise https://github.com/owner/repo/pull/456` 或 `/revise owner/repo#456` 或 `/revise 456` |
+
+**说明：**
+- 提供仅 `number` 时，`owner/repo` 从项目上下文（`/on` 设置的 repo）中获取
 
 ---
 
