@@ -1,80 +1,60 @@
 # Humera
 
-Humera is a **Human-controlled AI collaboration tool** for software engineering. Unlike autonomous agent systems, Humera keeps Human in the driver's seat — AI assists with confirmation and suggestions, but all final actions are executed by Human.
+Human 掌控的 AI 协作工具。
 
 ## Core Concept
 
+Human 发起所有任务，执行所有 slash command。AI 负责协助确认和建议。
+
 ```
-Human 提出 → AI 具体化确认 → Human 确认 → Human 执行 slash command
+Human 提出 → AI 确认 → Human 确认 → Human 执行 slash command
 ```
 
-**AI never executes final actions.** AI only:
-1. Confirms and specifies what Human proposed
-2. Provides suggestions
+## 4 Tasks
 
-**Human controls everything:**
-- Creating Issues
-- Pushing Code
-- Merging PRs
-
-## Task Types
-
-| Task | AI Output | Human Action |
-|------|-----------|--------------|
-| **Discuss** | Confirmed requirements document | `/create-issue` |
-| **Develop** | Code implementation suggestions | `/start-dev` → push code |
-| **Review** | PR review comments | Output to GitHub PR |
-| **Revise** | Fix suggestions | `/revise` → push fixes |
+| Task | Command | Output |
+|------|---------|--------|
+| **Discuss** | `/discuss` + `/create-issue` | GitHub Issue |
+| **Develop** | `/start-dev <issue>` | GitHub PR |
+| **Review** | `/review <pr>` | PR Comment |
+| **Revise** | `/revise <pr>` | Updated PR |
 
 ## Quick Start
 
 ```bash
-# Start Humera
-humera
+# 切换项目
+/on ~/code/myapp
 
-# Switch project (reads git remote automatically)
-> /on ~/code/myapp
-Project: github.com/owner/repo
+# 需求讨论
+/discuss 给 API 加 rate limiting
+AI 确认细节...
+/create-issue
 
-# Discuss requirements
-> 我要给 API 加 rate limiting
-[AI assists with confirmation...]
+# 开始开发
+/start-dev https://github.com/owner/repo/issues/123
+AI 自动编码、push、PR
 
-# Create issue (Human executes)
-> /create-issue
+# Review
+/review https://github.com/owner/repo/pull/456
+AI 输出 review 到 PR
 
-# Start development
-> /start-dev https://github.com/owner/repo/issues/123
-[AI assists with implementation...]
-
-# Review PR
-> /review https://github.com/owner/repo/pull/456
-[AI outputs review to GitHub PR]
+# 修正
+/revise https://github.com/owner/repo/pull/456
+AI 读取反馈、修改、push
 ```
 
 ## Architecture
 
 ```
 humera/
-├── channel/          # IM platforms (Telegram/Feishu/CLI/...)
-├── command/          # Slash command parsing
-├── assist/           # AI assistance
-│   ├── discuss.go       # Requirements discussion
-│   ├── review.go        # Code review
-│   └── suggest.go        # Fix suggestions
-├── project/          # Project context (from git remote)
-├── artifact/         # Artifacts (Issue/Code/PR Comment)
-└── infra/            # Storage, logging
+├── channel/      # IM 平台
+├── command/      # slash command 解析
+├── task/         # 任务处理器
+├── project/      # 项目上下文
+├── provider/     # LLM
+├── github/       # GitHub API
+└── infra/       # 存储、日志
 ```
-
-## Supported Channels
-
-- Telegram
-- Feishu (Lark)
-- Discord
-- WhatsApp
-- CLI
-- WebSocket
 
 ## License
 
