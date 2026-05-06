@@ -16,7 +16,8 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 |---------|------|------|--------|
 | `/on <path>` | 切换项目 | 设置项目上下文，进入讨论模式 | 项目上下文 |
 | `/new` | 创建 Issue | 把讨论结果创建为 GitHub Issue | GitHub Issue |
-| `/fix <issue>` | 开发 | 读取 Issue，编码，push，创建 PR | GitHub PR |
+| `/tdd <issue>` | 架构设计 | 架构设计 + stub 实现 + 失败测试用例 | GitHub PR（stub + 失败测试） |
+| `/fix <issue>` | 逻辑实现 | 实现逻辑，让测试通过 | 更新 PR（测试通过） |
 | `/review <pr>` | 审查 | Review PR 代码，写入 GitHub Comment | — |
 | `/revise <pr>` | 修正 | 读取 Review 反馈，修改代码，push | Updated PR |
 
@@ -27,7 +28,8 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 | `/on` | 无 |
 | Discuss（普通消息） | 如果没有 project context，AI 要求 Human 先执行 `/on` |
 | `/new` | 必须先执行 `/on`（依赖项目上下文中的 repo 信息） |
-| `/fix` | 必须先执行 `/on` |
+| `/tdd` | 必须先执行 `/on`，Issue 必须存在 |
+| `/fix` | 必须先执行 `/on`，必须在 `/tdd` 之后（继续同一个 PR） |
 | `/review` | 必须先执行 `/on` |
 | `/revise` | 必须先执行 `/on` |
 
@@ -56,6 +58,7 @@ Humera 是一个** Human 掌控的 AI 协作工具**。
 
 | Command | 参数格式 | 示例 |
 |---------|---------|------|
+| `/tdd` | Issue URL、完整 `owner/repo#number`、或仅 `number` | `/tdd https://github.com/owner/repo/issues/123` 或 `/tdd owner/repo#123` 或 `/tdd 123` |
 | `/fix` | Issue URL、完整 `owner/repo#number`、或仅 `number` | `/fix https://github.com/owner/repo/issues/123` 或 `/fix owner/repo#123` 或 `/fix 123` |
 | `/review` | PR URL、完整 `owner/repo#number`、或仅 `number` | `/review https://github.com/owner/repo/pull/456` 或 `/review owner/repo#456` 或 `/review 456` |
 | `/revise` | PR URL、完整 `owner/repo#number`、或仅 `number` | `/revise https://github.com/owner/repo/pull/456` 或 `/revise owner/repo#456` 或 `/revise 456` |
@@ -178,14 +181,14 @@ AI: 请先执行 /on <path> 设置项目上下文
 
 ---
 
-## 5. Task: Develop（编码开发）
+## 5. Task: TDD（架构设计 + stub + 测试）
 
 ### 5.1 Input / Output
 
 | | 内容 |
 |---|------|
 | **Input** | GitHub Issue URL |
-| **Output** | GitHub PR |
+| **Output** | GitHub PR（stub + 失败的测试） |
 
 ### 5.2 前置条件
 
@@ -197,31 +200,72 @@ AI: 请先执行 /on <path> 设置项目上下文
 
 | | Human | AI |
 |---|-------|-----|
-| 发起 | 执行 `/fix <issue>` | |
+| 发起 | 执行 `/tdd <issue>` | |
 | 读取 Issue | | 读取 GitHub Issue 详情 |
-| 分析需求 | | 分析需求 |
-| 编码实现 | | 编码实现 |
-| push 代码 | | push 代码到分支 |
-| 创建 PR | | 创建 GitHub PR |
+| 架构设计 | | 设计代码架构（接口、模块划分） |
+| stub 实现 | | 实现空方法/抛出异常/返回默认值 |
+| 编写测试 | | 编写测试用例（预期会失败） |
+| push + PR | | push 代码，创建 PR |
+
+### 5.4 输出要求
+
+- **stub 代码**：方法体为 `panic("not implemented")` 或 `return nil/默认值`
+- **失败测试**：测试用例应该失败（因为 stub 未实现）
+- **PR 状态**：CI 应该失败（测试不通过）
 
 ---
 
-## 6. Task: Review（代码审查）
+## 6. Task: Fix（逻辑实现）
 
 ### 6.1 Input / Output
+
+| | 内容 |
+|---|------|
+| **Input** | GitHub Issue URL |
+| **Output** | 更新 PR（让测试通过） |
+
+### 6.2 前置条件
+
+- 必须先执行 `/on <path>` 设置项目上下文
+- 必须在 `/tdd` 之后（继续同一个 PR）
+- PR 存在（由 `/tdd` 创建）
+
+### 6.3 角色
+
+| | Human | AI |
+|---|-------|-----|
+| 发起 | 执行 `/fix <issue>` | |
+| 读取 Issue | | 读取 GitHub Issue 详情 |
+| 分析 stub | | 分析当前 stub 实现 |
+| 实现逻辑 | | 实现具体逻辑 |
+| 通过测试 | | 确保测试通过 |
+| push | | push 代码到同一个 PR |
+
+### 6.4 说明
+
+- 在同一个 PR 上继续工作
+- 直到测试全部通过才进入 review
+- 可以多次 `/fix`
+
+---
+
+## 7. Task: Review（代码审查）
+
+### 7.1 Input / Output
 
 | | 内容 |
 |---|------|
 | **Input** | GitHub PR URL |
 | **Output** | 写入 GitHub PR Comment |
 
-### 6.2 前置条件
+### 7.2 前置条件
 
 - 必须先执行 `/on <path>` 设置项目上下文
 - `repo` 信息从项目上下文中获取
 - PR 必须在该 repo 中存在
+- 测试必须通过
 
-### 6.3 角色
+### 7.3 角色
 
 | | Human | AI |
 |---|-------|-----|
@@ -230,7 +274,7 @@ AI: 请先执行 /on <path> 设置项目上下文
 | 代码审查 | | 专业方式 review |
 | 写入 Comment | | 写入 GitHub PR Comment |
 
-### 6.4 Review 维度
+### 7.4 Review 维度
 
 | 维度 | 说明 |
 |------|------|
@@ -242,22 +286,22 @@ AI: 请先执行 /on <path> 设置项目上下文
 
 ---
 
-## 7. Task: Revise（修正）
+## 8. Task: Revise（修正）
 
-### 7.1 Input / Output
+### 8.1 Input / Output
 
 | | 内容 |
 |---|------|
 | **Input** | GitHub PR URL |
 | **Output** | 更新的 GitHub PR |
 
-### 7.2 前置条件
+### 8.2 前置条件
 
 - 必须先执行 `/on <path>` 设置项目上下文
 - `repo` 信息从项目上下文中获取
 - PR 必须有 Review Comments
 
-### 7.3 角色
+### 8.3 角色
 
 | | Human | AI |
 |---|-------|-----|
@@ -267,7 +311,7 @@ AI: 请先执行 /on <path> 设置项目上下文
 | 修改代码 | | 修改代码 |
 | push 代码 | | push 代码到远端 |
 
-### 7.4 迭代说明
+### 8.4 迭代说明
 
 Review 和 Revise 可以重复迭代：
 - Review 后可以 Revise
@@ -276,7 +320,7 @@ Review 和 Revise 可以重复迭代：
 
 ---
 
-## 8. 任务关系图
+## 9. 任务关系图
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -291,22 +335,24 @@ Review 和 Revise 可以重复迭代：
 │   /new ─────────────────────────→ GitHub Issue                  │
 │      │                                                         │
 │      ▼                                                         │
-│   /fix <issue> ──────────────────→ GitHub PR                   │
-│                                              │                   │
-│                                              │ Human 在 GitHub   │
-│                                              │ review PR         │
-│                                              ▼                   │
-│                                        /review ──→ PR Comment   │
-│                                              │                   │
-│                                              │ Human 执行        │
-│                                              ▼                   │
-│                                        /revise ──→ Updated PR  │
-│                                              │                   │
-│                                              │ 可以循环迭代      │
-│                                              ▼                   │
-│                                        /review ──→ ...         │
+│   /tdd <issue> ────────────────→ GitHub PR                      │
+│      │                    (stub + 失败的测试)                   │
+│      │                                                         │
+│      ▼                                                         │
+│   /fix <issue> ────────────────→ 继续同一个 PR                  │
+│      │                    (实现逻辑 → 测试通过)                │
+│      │                                                         │
+│      ▼                                                         │
+│   /review <pr> ──────────────────→ PR Comment                   │
+│      │                           (测试通过后才能 review)       │
+│      │                                                         │
+│      ▼                                                         │
+│   /revise <pr> ─────────────────→ Updated PR                   │
+│      │                                                         │
+│      │ 可以循环迭代                                             │
+│      ▼                                                         │
+│   /review <pr> ────────────────→ ...                            │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
-```
 
 
